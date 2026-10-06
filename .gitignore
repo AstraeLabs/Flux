@@ -1,0 +1,14 @@
+target/
+**/*.rs.bk
+.DS_Store
+.worktree/
+.worktrees/
+.delegate/
+.worktrees/
+*.rlib
+*.rmeta
+/.test-streams/
+.playwright-mcp/
+/target*/
+target-*/
+.cargo-ramdisk-gb

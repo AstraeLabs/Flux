@@ -1,0 +1,11 @@
+[workspace]
+members = ["bitforge", "eventframe", "flux", "flux-iocp"]
+resolver = "2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+debug = false
+panic = "abort"

@@ -1,0 +1,16 @@
+[package]
+name    = "eventframe"
+version = "0.0.1"
+edition = "2024"
+
+[dependencies]
+bitforge = { path = "../bitforge", version = "0.0.1", default-features = false }
+thiserror  = { version = "2", default-features = false }
+serde      = { version = "1", optional = true, features = ["derive"] }
+
+[features]
+default = ["std"]
+# `std` links the standard library. Without it the crate is `#![no_std]` and
+# needs only `alloc`.
+std = ["bitforge/std", "thiserror/std"]
+serde = ["dep:serde"]

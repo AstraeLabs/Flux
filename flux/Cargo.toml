@@ -1,0 +1,34 @@
+[package]
+name    = "flux"
+version = "0.5.0"
+edition = "2024"
+
+[dependencies]
+bitforge   = { path = "../bitforge", version = "0.0.1", default-features = false }
+thiserror  = { version = "2", default-features = false }
+serde      = { version = "1", default-features = false, features = ["derive", "alloc"], optional = true }
+bytes      = { version = "1", default-features = false }
+aes        = { version = "0.8", default-features = false, optional = true }
+ctr        = { version = "0.9", default-features = false, optional = true }
+cbc        = { version = "0.1", default-features = false, optional = true }
+clap       = { version = "4.5", features = ["derive"], optional = true }
+serde_json = { version = "1.0", default-features = false, features = ["alloc"], optional = true }
+
+[target.'cfg(windows)'.dependencies]
+flux-iocp = { path = "../flux-iocp", version = "0.0.1", optional = true }
+
+[[bin]]
+name = "flux"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+default = ["std", "serde", "cenc"]
+std    = ["bitforge/std", "thiserror/std", "serde?/std"]
+serde  = ["dep:serde", "bitforge/serde"]
+cenc   = ["dep:aes", "dep:ctr", "dep:cbc"]
+sample-aes = ["cenc", "cbc/alloc", "cbc/block-padding"]
+cli    = ["dep:clap", "std", "dep:flux-iocp", "dep:serde_json"]
+
+[dev-dependencies]
+serde_json   = "1.0"
