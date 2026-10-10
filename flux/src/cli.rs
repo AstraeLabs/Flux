@@ -230,7 +230,7 @@ pub enum CliError {
     UnknownContainer,
     UndeterminedFormat,
     NoTracksSelected,
-    BadKey(String),
+    BadKey,
     UnsupportedSampleAes,
     KeySanityCheckFailed {
         track_id: u32,
@@ -255,8 +255,8 @@ impl fmt::Display for CliError {
             CliError::NoTracksSelected => {
                 write!(f, "the --tracks selection matched no tracks in the input")
             }
-            CliError::BadKey(s) => {
-                write!(f, "invalid --key {s:?}: expected <32-hex-KID>:<32-hex-key>")
+            CliError::BadKey => {
+                write!(f, "invalid --key: expected <32-hex-KID>:<32-hex-key>")
             }
             CliError::UnsupportedSampleAes => write!(
                 f,
@@ -2493,9 +2493,9 @@ fn alloc_vec_of_empty<T>(n: usize) -> Vec<Vec<T>> {
 fn parse_key(spec: &str) -> CliResult<([u8; 16], [u8; 16])> {
     let (kid_hex, key_hex) = spec
         .split_once(':')
-        .ok_or_else(|| CliError::BadKey(spec.to_string()))?;
-    let kid = parse_hex16(kid_hex).ok_or_else(|| CliError::BadKey(spec.to_string()))?;
-    let key = parse_hex16(key_hex).ok_or_else(|| CliError::BadKey(spec.to_string()))?;
+        .ok_or(CliError::BadKey)?;
+    let kid = parse_hex16(kid_hex).ok_or(CliError::BadKey)?;
+    let key = parse_hex16(key_hex).ok_or(CliError::BadKey)?;
     Ok((kid, key))
 }
 
@@ -2510,4 +2510,38 @@ fn parse_hex16(s: &str) -> Option<[u8; 16]> {
         *byte = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()?;
     }
     Some(out)
+}
+
+
+#[cfg(all(test, feature = "cenc"))]
+mod invalid_key_redaction_tests {
+    use super::parse_key;
+
+    #[test]
+    fn invalid_key_errors_never_disclose_input() {
+        const EXPECTED: &str = "invalid --key: expected <32-hex-KID>:<32-hex-key>";
+        let marker = "sensitive-content-key-marker";
+        let invalid_specs = [
+            format!("{}:{marker}", "00".repeat(16)),
+            format!("bad-kid:{}", "11".repeat(16)),
+            "malformed-key-specification".to_string(),
+        ];
+
+        for spec in invalid_specs {
+            let message = parse_key(&spec)
+                .expect_err("invalid key specification must be rejected")
+                .to_string();
+            assert_eq!(message, EXPECTED);
+            assert!(!message.contains(&spec));
+            assert!(!message.contains(marker));
+        }
+    }
+
+    #[test]
+    fn valid_key_specifications_still_parse() {
+        let specification = format!("{}:{}", "ab".repeat(16), "cd".repeat(16));
+        let (kid, key) = parse_key(&specification).expect("valid key should parse");
+        assert_eq!(kid, [0xab; 16]);
+        assert_eq!(key, [0xcd; 16]);
+    }
 }
