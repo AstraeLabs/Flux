@@ -30,6 +30,7 @@ const MAX_SINGLE_READ: u64 = 256 << 20;
 /// Upper bounds for the tuning flags (KB / queue slots).
 const MAX_WRITER_BUF_KB: u32 = 64 * 1024;
 const MAX_PARALLEL_MIN_KB: u32 = 1 << 22;
+#[cfg(all(feature = "cenc", windows))]
 const MAX_IO_DEPTH: u32 = 256;
 /// Longest accepted daemon job line.
 #[cfg(all(feature = "cli", feature = "cenc"))]
