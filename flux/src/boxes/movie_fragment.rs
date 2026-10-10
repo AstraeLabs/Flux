@@ -405,6 +405,9 @@ pub struct TrackFragmentRunBox {
     pub samples: Vec<TrunSample>,
 }
 
+/// Cap on `sample_count` when a `trun` carries no per-sample fields (so no data bounds it).
+const MAX_TRUN_SAMPLES_NO_FIELDS: usize = 1 << 24;
+
 impl TrackFragmentRunBox {
     pub fn parse_body(body: &[u8]) -> Result<Self> {
         let (ver, tr_flags) = read_ver_flags(body)?;
@@ -456,6 +459,22 @@ impl TrackFragmentRunBox {
         let has_flg = tr_flags & TRUN_SAMPLE_FLAGS_PRESENT != 0;
         let has_cto = tr_flags & TRUN_SAMPLE_COMPOSITION_TIME_OFFSET_PRESENT != 0;
 
+        let stride = 4 * (has_dur as usize + has_sz as usize + has_flg as usize + has_cto as usize);
+        if stride > 0 {
+            if sc > payload.len().saturating_sub(c) / stride {
+                return Err(Error::BufferTooShort {
+                    need: c.saturating_add(sc.saturating_mul(stride)),
+                    have: payload.len(),
+                    what: "trun sample table",
+                });
+            }
+        } else if sc > MAX_TRUN_SAMPLES_NO_FIELDS {
+            return Err(Error::InvalidValue {
+                field: "trun.sample_count",
+                value: sc as u64,
+                reason: "too many samples for a trun without per-sample fields",
+            });
+        }
         let mut samples = Vec::with_capacity(sc);
         for _ in 0..sc {
             let mut s = TrunSample::new();
@@ -910,7 +929,7 @@ pub fn protect_media_segment(
 
     let mfhd_len = moof.mfhd.serialized_len();
     let new_moof_len = BOX_HEADER_SIZE + mfhd_len + final_lens.iter().sum::<usize>();
-    let delta = new_moof_len as i64 - moof_len as i64;
+    let delta = (new_moof_len as i64).saturating_sub(moof_len as i64);
 
     let mut running = (BOX_HEADER_SIZE + mfhd_len) as u64;
     for (i, traf) in moof.traf.iter_mut().enumerate() {
@@ -922,13 +941,23 @@ pub fn protect_media_segment(
 
         for run in &mut traf.trun {
             if run.tr_flags & TRUN_DATA_OFFSET_PRESENT != 0 {
-                run.data_offset = Some(run.data_offset.unwrap_or(0) + delta as i32);
+                let new_off = i64::from(run.data_offset.unwrap_or(0))
+                    .checked_add(delta)
+                    .and_then(|v| i32::try_from(v).ok())
+                    .ok_or(Error::InvalidInput(
+                        "protect_media_segment: trun data_offset overflows i32 after moof resize",
+                    ))?;
+                run.data_offset = Some(new_off);
             }
         }
     }
 
     let mut moof_out = alloc::vec![0u8; new_moof_len];
-    moof_out[0..4].copy_from_slice(&(new_moof_len as u32).to_be_bytes());
+    moof_out[0..4].copy_from_slice(
+        &u32::try_from(new_moof_len)
+            .map_err(|_| Error::InvalidInput("protect_media_segment: moof too large"))?
+            .to_be_bytes(),
+    );
     moof_out[4..8].copy_from_slice(b"moof");
     let mut c = BOX_HEADER_SIZE;
     c += moof.mfhd.serialize_into(&mut moof_out[c..])?;
@@ -939,7 +968,8 @@ pub fn protect_media_segment(
             c += b.senc.serialize_into(&mut moof_out[c..])?;
             c += b.saiz.serialize_into(&mut moof_out[c..])?;
             c += b.saio.serialize_into(&mut moof_out[c..])?;
-            let final_len = (c - start) as u32;
+            let final_len = u32::try_from(c - start)
+                .map_err(|_| Error::InvalidInput("protect_media_segment: traf too large"))?;
             moof_out[start..start + 4].copy_from_slice(&final_len.to_be_bytes());
         }
     }
@@ -954,4 +984,35 @@ pub fn protect_media_segment(
     out.extend_from_slice(&moof_out);
     out.extend_from_slice(suffix);
     Ok(out)
+}
+
+#[cfg(test)]
+mod hardening_tests {
+    use super::*;
+
+    fn trun_body(flags: u32, sample_count: u32, rest: &[u8]) -> Vec<u8> {
+        let mut v = alloc::vec![0u8];
+        v.extend_from_slice(&flags.to_be_bytes()[1..]);
+        v.extend_from_slice(&sample_count.to_be_bytes());
+        v.extend_from_slice(rest);
+        v
+    }
+
+    #[test]
+    fn trun_huge_sample_count_with_fields_errors() {
+        let b = trun_body(TRUN_SAMPLE_SIZE_PRESENT, 0xFFFF_FFFF, &[0; 8]);
+        assert!(TrackFragmentRunBox::parse_body(&b).is_err());
+    }
+
+    #[test]
+    fn trun_huge_sample_count_without_fields_errors() {
+        let b = trun_body(0, 0xFFFF_FFFF, &[]);
+        assert!(TrackFragmentRunBox::parse_body(&b).is_err());
+    }
+
+    #[test]
+    fn trun_zero_samples_ok() {
+        let b = trun_body(TRUN_SAMPLE_SIZE_PRESENT, 0, &[]);
+        assert!(TrackFragmentRunBox::parse_body(&b).unwrap().samples.is_empty());
+    }
 }

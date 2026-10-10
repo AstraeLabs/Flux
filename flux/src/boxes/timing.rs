@@ -43,7 +43,11 @@ impl TimeToSampleBox {
         let flags = u32::from_be_bytes([0, body[1], body[2], body[3]]);
         let entry_count = u32::from_be_bytes([body[4], body[5], body[6], body[7]]) as usize;
         let mut c = FULLBOX_EXTRA_SIZE + 4;
-        let mut entries = Vec::with_capacity(entry_count);
+        let mut entries = Vec::with_capacity(super::bounded_capacity(
+            entry_count,
+            8,
+            body.len().saturating_sub(c),
+        ));
         for _ in 0..entry_count {
             if body.len() < c + 8 {
                 return Err(Error::BufferTooShort {
@@ -157,7 +161,11 @@ impl CompositionOffsetBox {
         let entry_count = u32::from_be_bytes([body[4], body[5], body[6], body[7]]) as usize;
         let entry_size: usize = 8;
         let mut c = FULLBOX_EXTRA_SIZE + 4;
-        let mut entries = Vec::with_capacity(entry_count);
+        let mut entries = Vec::with_capacity(super::bounded_capacity(
+            entry_count,
+            8,
+            body.len().saturating_sub(c),
+        ));
         for _ in 0..entry_count {
             if body.len() < c + entry_size {
                 return Err(Error::BufferTooShort {
@@ -416,7 +424,11 @@ impl EditListBox {
         let entry_count = u32::from_be_bytes([body[4], body[5], body[6], body[7]]) as usize;
         let entry_size: usize = if version == 0 { 4 + 4 + 4 } else { 8 + 8 + 4 };
         let mut c = FULLBOX_EXTRA_SIZE + 4;
-        let mut entries = Vec::with_capacity(entry_count);
+        let mut entries = Vec::with_capacity(super::bounded_capacity(
+            entry_count,
+            entry_size,
+            body.len().saturating_sub(c),
+        ));
         for _ in 0..entry_count {
             if body.len() < c + entry_size {
                 return Err(Error::BufferTooShort {
@@ -577,6 +589,14 @@ impl SegmentIndexBox {
         }
         let version = body[0];
         let flags = u32::from_be_bytes([0, body[1], body[2], body[3]]);
+        let hdr_need = FULLBOX_EXTRA_SIZE + 4 + 4 + if version == 0 { 8 } else { 16 } + 2 + 2;
+        if body.len() < hdr_need {
+            return Err(Error::BufferTooShort {
+                need: hdr_need,
+                have: body.len(),
+                what: "sidx body (version-dependent header)",
+            });
+        }
         let mut c = FULLBOX_EXTRA_SIZE;
         let reference_id = u32::from_be_bytes([body[c], body[c + 1], body[c + 2], body[c + 3]]);
         c += 4;
@@ -613,18 +633,22 @@ impl SegmentIndexBox {
             c += 8;
             (ept, fo)
         };
-        if body.len() < c + 2 {
+        if body.len() < c + 4 {
             return Err(Error::BufferTooShort {
-                need: c + 2,
+                need: c + 4,
                 have: body.len(),
                 what: "sidx reserved+count",
             });
         }
-        let _reserved = body[c] >> 4;
+        c += 2;
         let reference_count = u16::from_be_bytes([body[c], body[c + 1]]) as usize;
         c += 2;
 
-        let mut references = Vec::with_capacity(reference_count);
+        let mut references = Vec::with_capacity(super::bounded_capacity(
+            reference_count,
+            12,
+            body.len().saturating_sub(c),
+        ));
         for _ in 0..reference_count {
             if body.len() < c + 12 {
                 return Err(Error::BufferTooShort {
@@ -701,6 +725,7 @@ impl Serialize for SegmentIndexBox {
             + time_size
             + time_size
             + 2
+            + 2
             + self.references.len() * 12
     }
     fn serialize_into(&self, buf: &mut [u8]) -> Result<usize> {
@@ -737,6 +762,8 @@ impl Serialize for SegmentIndexBox {
             buf[c..c + 8].copy_from_slice(&self.first_offset.to_be_bytes());
             c += 8;
         }
+        buf[c..c + 2].copy_from_slice(&0u16.to_be_bytes()); // reserved
+        c += 2;
         buf[c..c + 2].copy_from_slice(&(self.references.len() as u16).to_be_bytes());
         c += 2;
         for r in &self.references {
@@ -752,5 +779,73 @@ impl Serialize for SegmentIndexBox {
             c += 4;
         }
         Ok(c)
+    }
+}
+
+#[cfg(test)]
+mod hardening_tests {
+    use super::*;
+
+    fn fullbox_body(count: u32, extra: &[u8]) -> Vec<u8> {
+        let mut v = alloc::vec![0, 0, 0, 0];
+        v.extend_from_slice(&count.to_be_bytes());
+        v.extend_from_slice(extra);
+        v
+    }
+
+    #[test]
+    fn sidx_follows_the_iso_layout_and_round_trips() {
+        let mut b: Vec<u8> = Vec::new();
+        b.extend_from_slice(&0u32.to_be_bytes());
+        b.extend_from_slice(b"sidx");
+        b.extend_from_slice(&[0, 0, 0, 0]);
+        b.extend_from_slice(&1u32.to_be_bytes());
+        b.extend_from_slice(&90_000u32.to_be_bytes());
+        b.extend_from_slice(&1_000u32.to_be_bytes());
+        b.extend_from_slice(&2_000u32.to_be_bytes());
+        b.extend_from_slice(&0u16.to_be_bytes());
+        b.extend_from_slice(&1u16.to_be_bytes());
+        b.extend_from_slice(&(0x8000_0000u32 | 1234).to_be_bytes());
+        b.extend_from_slice(&3_000u32.to_be_bytes());
+        b.extend_from_slice(&(0x9000_0000u32 | 5).to_be_bytes());
+        let len = b.len() as u32;
+        b[0..4].copy_from_slice(&len.to_be_bytes());
+
+        let parsed = SegmentIndexBox::parse(&b).unwrap();
+        assert_eq!(parsed.references.len(), 1);
+        assert_eq!(parsed.references[0].referenced_size, 1234);
+        assert_eq!(parsed.references[0].reference_type, 1);
+        assert_eq!(parsed.references[0].sap_type, 1);
+        assert_eq!(parsed.references[0].sap_delta_time, 5);
+        assert_eq!(parsed.first_offset, 2_000);
+
+        let mut out = alloc::vec![0u8; parsed.serialized_len()];
+        let n = parsed.serialize_into(&mut out).unwrap();
+        assert_eq!(&out[..n], &b[..]);
+    }
+
+    #[test]
+    fn stts_ctts_elst_huge_count_errors() {
+        let b = fullbox_body(u32::MAX, &[0; 8]);
+        assert!(TimeToSampleBox::parse_body(&b).is_err());
+        assert!(CompositionOffsetBox::parse_body(&b).is_err());
+        assert!(EditListBox::parse_body(&b).is_err());
+        let b = fullbox_body(0, &[]);
+        assert!(TimeToSampleBox::parse_body(&b).unwrap().entries.is_empty());
+    }
+
+    #[test]
+    fn sidx_truncated_headers_error() {
+        for version in [0u8, 1] {
+            // Passes the old minimum-length check (14 bytes) but not the real header size.
+            let mut b = alloc::vec![version, 0, 0, 0];
+            b.extend_from_slice(&[0; 10]);
+            assert!(SegmentIndexBox::parse_body(&b).is_err());
+        }
+        // v0 header complete, reference_count huge, no entries.
+        let mut b = alloc::vec![0u8, 0, 0, 0];
+        b.extend_from_slice(&[0; 16]);
+        b.extend_from_slice(&[0xFF, 0xFF]);
+        assert!(SegmentIndexBox::parse_body(&b).is_err());
     }
 }

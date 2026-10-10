@@ -156,7 +156,7 @@ impl OpaqueBox {
 
 pub(crate) fn find_config_box<'a>(region: &'a [u8], fourcc: &[u8; 4]) -> Option<&'a [u8]> {
     let mut off = 0usize;
-    while off + 8 <= region.len() {
+    while off.checked_add(8).is_some_and(|e| e <= region.len()) {
         let size = u32::from_be_bytes([
             region[off],
             region[off + 1],
@@ -168,9 +168,9 @@ pub(crate) fn find_config_box<'a>(region: &'a [u8], fourcc: &[u8; 4]) -> Option<
         }
         let ty = &region[off + 4..off + 8];
         if ty == fourcc {
-            return Some(&region[off..off + size]);
+            return region.get(off..off.checked_add(size)?);
         }
-        off += size;
+        off = off.checked_add(size)?;
     }
     None
 }
@@ -663,5 +663,24 @@ impl Serialize for VVCSampleEntry {
             cursor += eb.serialize_into(&mut buf[cursor..])?;
         }
         Ok(cursor)
+    }
+}
+
+#[cfg(test)]
+mod hardening_tests {
+    use super::find_config_box;
+
+    #[test]
+    fn find_config_box_size_beyond_region_is_none() {
+        // avcC declares 0x1000 bytes but only 12 exist.
+        let mut r = alloc::vec![0, 0, 0x10, 0x00];
+        r.extend_from_slice(b"avcC");
+        r.extend_from_slice(&[1, 2, 3, 4]);
+        assert!(find_config_box(&r, b"avcC").is_none());
+        // Non-matching box with huge size must not overflow the offset either.
+        let mut r = alloc::vec![0xFF, 0xFF, 0xFF, 0xFF];
+        r.extend_from_slice(b"free");
+        assert!(find_config_box(&r, b"avcC").is_none());
+        assert!(find_config_box(&[], b"avcC").is_none());
     }
 }

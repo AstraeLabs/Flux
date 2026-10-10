@@ -42,7 +42,13 @@ pub fn build_init_segment(tracks: &[TrackSpec], movie_timescale: u32) -> Result<
         compatible_brands: vec![*b"iso5", *b"iso6", *b"mp41"],
     };
 
-    let next_track_id = tracks.iter().map(|t| t.track_id).max().unwrap_or(0) + 1;
+    let next_track_id = tracks
+        .iter()
+        .map(|t| t.track_id)
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or(crate::error::Error::InvalidInput("track_id u32::MAX leaves no next_track_id"))?;
     let mvhd = MovieHeaderBox {
         version: 0,
         flags: 0,

@@ -6,12 +6,17 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -74,9 +79,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.95.0
         with:
           targets: ${{ matrix.target }}
 
@@ -91,19 +98,19 @@ jobs:
 
       - name: Install cross
         if: matrix.cross == true
-        run: cargo install cross --git https://github.com/cross-rs/cross
+        run: cargo install cross --locked --version 0.2.5
 
       - name: Build (cargo)
         if: matrix.cross != true
         shell: bash
         run: |
-          cargo build --release -p flux --all-features --target ${{ matrix.target }}
+          cargo build --locked --release -p flux --all-features --target ${{ matrix.target }}
 
       - name: Build (cross)
         if: matrix.cross == true
         shell: bash
         run: |
-          cross build --release -p flux --all-features --target ${{ matrix.target }}
+          cross build --locked --release -p flux --all-features --target ${{ matrix.target }}
 
       - name: Stage artifact
         shell: bash
@@ -124,7 +131,11 @@ jobs:
   update-release:
     name: Update release assets
     needs: build
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -134,6 +145,12 @@ jobs:
 
       - name: List built binaries
         run: ls -lh dist/
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
 
       - name: Upload / overwrite release assets
         uses: softprops/action-gh-release@v2

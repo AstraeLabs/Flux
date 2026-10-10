@@ -19,9 +19,38 @@ use crate::movie_fragment::{
 
 const KEY_LEN: usize = 16;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Content keys indexed by KID. Key bytes are wiped on drop and never printed.
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct KeyMap {
-    keys: BTreeMap<[u8; KEY_LEN], [u8; KEY_LEN]>,
+    keys: BTreeMap<[u8; KEY_LEN], zeroize::Zeroizing<[u8; KEY_LEN]>>,
+}
+
+impl core::fmt::Debug for KeyMap {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        struct Kids<'a>(&'a BTreeMap<[u8; KEY_LEN], zeroize::Zeroizing<[u8; KEY_LEN]>>);
+        impl core::fmt::Debug for Kids<'_> {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                let mut l = f.debug_list();
+                for kid in self.0.keys() {
+                    l.entry(&format_args!("{}", HexKid(kid)));
+                }
+                l.finish()
+            }
+        }
+        struct HexKid<'a>(&'a [u8; KEY_LEN]);
+        impl core::fmt::Display for HexKid<'_> {
+            fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                for b in self.0 {
+                    write!(f, "{b:02x}")?;
+                }
+                Ok(())
+            }
+        }
+        f.debug_struct("KeyMap")
+            .field("keys", &self.keys.len())
+            .field("kids", &Kids(&self.keys))
+            .finish()
+    }
 }
 
 impl KeyMap {
@@ -32,16 +61,16 @@ impl KeyMap {
     }
 
     pub fn with_key(mut self, kid: [u8; KEY_LEN], key: [u8; KEY_LEN]) -> Self {
-        self.keys.insert(kid, key);
+        self.keys.insert(kid, zeroize::Zeroizing::new(key));
         self
     }
 
     pub fn insert(&mut self, kid: [u8; KEY_LEN], key: [u8; KEY_LEN]) {
-        self.keys.insert(kid, key);
+        self.keys.insert(kid, zeroize::Zeroizing::new(key));
     }
 
     pub fn get(&self, kid: &[u8; KEY_LEN]) -> Option<&[u8; KEY_LEN]> {
-        self.keys.get(kid)
+        self.keys.get(kid).map(|k| &**k)
     }
 }
 
@@ -564,35 +593,40 @@ fn resolve_aux_from_saiz_saio(
         return None;
     }
 
+    let aux_slice = |start: u64, sz: usize| -> Option<&[u8]> {
+        let start = usize::try_from(start).ok()?;
+        let end = start.checked_add(sz)?;
+        file.get(start..end)
+    };
+    let placeholder = || SampleEncryptionEntry {
+        initialization_vector: Vec::new(),
+        subsamples: Vec::new(),
+        is_encrypted: true,
+        explicit_kid: None,
+    };
+
     let mut entries = Vec::with_capacity(sizes.len());
     if offsets.len() == 1 {
         let mut cur = offsets[0];
         for &sz in &sizes {
             let sz = sz as usize;
             if sz == 0 {
-                entries.push(SampleEncryptionEntry {
-                    initialization_vector: Vec::new(),
-                    subsamples: Vec::new(),
-                    is_encrypted: true,
-                    explicit_kid: None,
-                });
+                entries.push(placeholder());
                 continue;
             }
-            let start = cur as usize;
-            if start + sz > file.len() {
-                return None;
-            }
-            entries.push(parse_one_aux_entry(&file[start..start + sz], per_sample_iv_size)?);
-            cur += sz as u64;
+            entries.push(parse_one_aux_entry(
+                aux_slice(cur, sz)?,
+                per_sample_iv_size,
+            )?);
+            cur = cur.checked_add(sz as u64)?;
         }
     } else if offsets.len() == sizes.len() {
         for (i, &sz) in sizes.iter().enumerate() {
             let sz = sz as usize;
-            let start = offsets[i] as usize;
-            if start + sz > file.len() {
-                return None;
-            }
-            entries.push(parse_one_aux_entry(&file[start..start + sz], per_sample_iv_size)?);
+            entries.push(parse_one_aux_entry(
+                aux_slice(offsets[i], sz)?,
+                per_sample_iv_size,
+            )?);
         }
     } else {
         return None;
@@ -600,75 +634,73 @@ fn resolve_aux_from_saiz_saio(
     Some(entries)
 }
 
+const MAX_UNBACKED_COUNT: usize = 1 << 26;
+
+fn read_u32_at(b: &[u8], off: usize) -> Option<u32> {
+    let s = b.get(off..off.checked_add(4)?)?;
+    Some(u32::from_be_bytes([s[0], s[1], s[2], s[3]]))
+}
+
+fn read_u64_at(b: &[u8], off: usize) -> Option<u64> {
+    let s = b.get(off..off.checked_add(8)?)?;
+    Some(u64::from_be_bytes([
+        s[0], s[1], s[2], s[3], s[4], s[5], s[6], s[7],
+    ]))
+}
+
 fn parse_saiz_sizes(saiz: &[u8]) -> Option<Vec<u8>> {
-    if saiz.len() < BOX_HEADER_MIN_SIZE + FULL_HDR + 1 + 4 {
-        return None;
-    }
-    let mut off = BOX_HEADER_MIN_SIZE + FULL_HDR;
     let flags = u32::from_be_bytes([
         0,
-        saiz[BOX_HEADER_MIN_SIZE + 1],
-        saiz[BOX_HEADER_MIN_SIZE + 2],
-        saiz[BOX_HEADER_MIN_SIZE + 3],
+        *saiz.get(BOX_HEADER_MIN_SIZE + 1)?,
+        *saiz.get(BOX_HEADER_MIN_SIZE + 2)?,
+        *saiz.get(BOX_HEADER_MIN_SIZE + 3)?,
     ]);
+    let mut off = BOX_HEADER_MIN_SIZE + FULL_HDR;
     if flags & 0x1 != 0 {
         off += 8;
     }
-    let default_size = saiz[off];
+    let default_size = *saiz.get(off)?;
     off += 1;
-    let count = u32::from_be_bytes(saiz[off..off + 4].try_into().ok()?) as usize;
+    let count = read_u32_at(saiz, off)? as usize;
     off += 4;
-    let mut sizes = Vec::with_capacity(count);
     if default_size != 0 {
-        for _ in 0..count {
-            sizes.push(default_size);
-        }
-    } else {
-        if saiz.len() < off + count {
+        if count > MAX_UNBACKED_COUNT {
             return None;
         }
-        for i in 0..count {
-            sizes.push(saiz[off + i]);
-        }
+        Some(alloc::vec![default_size; count])
+    } else {
+        Some(saiz.get(off..)?.get(..count)?.to_vec())
     }
-    Some(sizes)
 }
 
 fn parse_saio_offsets(saio: &[u8], base_offset: u64) -> Option<Vec<u64>> {
-    if saio.len() < BOX_HEADER_MIN_SIZE + FULL_HDR + 4 {
-        return None;
-    }
-    let version = saio[BOX_HEADER_MIN_SIZE];
-    let mut off = BOX_HEADER_MIN_SIZE + FULL_HDR;
+    let version = *saio.get(BOX_HEADER_MIN_SIZE)?;
     let flags = u32::from_be_bytes([
         0,
-        saio[BOX_HEADER_MIN_SIZE + 1],
-        saio[BOX_HEADER_MIN_SIZE + 2],
-        saio[BOX_HEADER_MIN_SIZE + 3],
+        *saio.get(BOX_HEADER_MIN_SIZE + 1)?,
+        *saio.get(BOX_HEADER_MIN_SIZE + 2)?,
+        *saio.get(BOX_HEADER_MIN_SIZE + 3)?,
     ]);
+    let mut off = BOX_HEADER_MIN_SIZE + FULL_HDR;
     if flags & 0x1 != 0 {
         off += 8;
     }
-    let count = u32::from_be_bytes(saio[off..off + 4].try_into().ok()?) as usize;
+    let count = read_u32_at(saio, off)? as usize;
     off += 4;
+    let elem = if version == 0 { 4 } else { 8 };
+    let remaining = saio.len().checked_sub(off)?;
+    if count > remaining / elem {
+        return None;
+    }
     let mut offsets = Vec::with_capacity(count);
     for _ in 0..count {
         let o = if version == 0 {
-            if saio.len() < off + 4 {
-                return None;
-            }
-            let v = u32::from_be_bytes(saio[off..off + 4].try_into().ok()?);
-            off += 4;
-            v as u64
+            u64::from(read_u32_at(saio, off)?)
         } else {
-            if saio.len() < off + 8 {
-                return None;
-            }
-            let v = u64::from_be_bytes(saio[off..off + 8].try_into().ok()?);
-            off += 8;
-            v
+            read_u64_at(saio, off)?
         };
-        offsets.push(base_offset + o);
+        off += elem;
+        offsets.push(base_offset.checked_add(o)?);
     }
     Some(offsets)
 }
@@ -706,6 +738,11 @@ fn parse_one_aux_entry(aux: &[u8], per_sample_iv_size: u8) -> Option<SampleEncry
     const SEIG_GROUPING_TYPE: &[u8; 4] = b"seig";
 
     fn parse_seig_groups(body: &[u8]) -> Result<Vec<SeigGroup>> {
+        let short = |need: usize| Error::BufferTooShort {
+            need,
+            have: body.len(),
+            what: "sgpd seig",
+        };
         if body.len() < 8 {
             return Err(Error::BufferTooShort {
                 need: 8,
@@ -720,7 +757,7 @@ fn parse_one_aux_entry(aux: &[u8], per_sample_iv_size: u8) -> Option<SampleEncry
         }
         off += 4;
         let default_length = if version >= 1 {
-            let d = u32::from_be_bytes(body[off..off + 4].try_into().unwrap()) as usize;
+            let d = read_u32_at(body, off).ok_or_else(|| short(off + 4))? as usize;
             off += 4;
             d
         } else {
@@ -729,19 +766,26 @@ fn parse_one_aux_entry(aux: &[u8], per_sample_iv_size: u8) -> Option<SampleEncry
         if version >= 2 {
             off += 4;
         }
-        let count = u32::from_be_bytes(body[off..off + 4].try_into().unwrap()) as usize;
+        let count = read_u32_at(body, off).ok_or_else(|| short(off + 4))? as usize;
         off += 4;
+        // every entry occupies at least 4 bytes (or its length prefix)
+        let remaining = body.len().saturating_sub(off);
+        let min_entry = if default_length != 0 { default_length } else { 4 };
+        if count > remaining / min_entry {
+            return Err(short(off.saturating_add(count.saturating_mul(min_entry))));
+        }
         let mut groups = Vec::with_capacity(count);
         for _ in 0..count {
-            let (desc, next): (&[u8], usize) = if default_length != 0 {
-                (&body[off..off + default_length], off + default_length)
+            let (len, start) = if default_length != 0 {
+                (default_length, off)
             } else {
-                let dl = u32::from_be_bytes(body[off..off + 4].try_into().unwrap()) as usize;
-                off += 4;
-                (&body[off..off + dl], off + dl)
+                let dl = read_u32_at(body, off).ok_or_else(|| short(off + 4))? as usize;
+                (dl, off + 4)
             };
+            let end = start.checked_add(len).ok_or_else(|| short(usize::MAX))?;
+            let desc = body.get(start..end).ok_or_else(|| short(end))?;
             groups.push(parse_seig_entry(desc, version)?);
-            off = next;
+            off = end;
         }
         Ok(groups)
     }
@@ -779,6 +823,11 @@ fn parse_one_aux_entry(aux: &[u8], per_sample_iv_size: u8) -> Option<SampleEncry
     }
 
     fn parse_seig_sample_groups(body: &[u8], sample_count: usize) -> Result<Vec<u32>> {
+        let short = |need: usize| Error::BufferTooShort {
+            need,
+            have: body.len(),
+            what: "sbgp seig",
+        };
         if body.len() < 8 {
             return Err(Error::BufferTooShort {
                 need: 8,
@@ -789,34 +838,40 @@ fn parse_one_aux_entry(aux: &[u8], per_sample_iv_size: u8) -> Option<SampleEncry
         let version = body[0];
         let mut off = 4;
         if &body[off..off + 4] != SEIG_GROUPING_TYPE {
-            return Ok(vec![0u32; sample_count]);
+            return Ok(alloc::vec![0u32; sample_count.min(MAX_UNBACKED_COUNT)]);
         }
         off += 4;
         let index_type = if version >= 1 {
-            let t = u32::from_be_bytes(body[off..off + 4].try_into().unwrap());
+            let t = read_u32_at(body, off).ok_or_else(|| short(off + 4))?;
             off += 4;
             t
         } else {
             0
         };
-        let count = u32::from_be_bytes(body[off..off + 4].try_into().unwrap()) as usize;
+        let count = read_u32_at(body, off).ok_or_else(|| short(off + 4))? as usize;
         off += 4;
+        let wide = version >= 1 && index_type == 1;
+        let entry_len = 4 + if wide { 8 } else { 4 };
+        if count > body.len().saturating_sub(off) / entry_len {
+            return Err(short(off.saturating_add(count.saturating_mul(entry_len))));
+        }
+        let sample_count = sample_count.min(MAX_UNBACKED_COUNT);
         let mut out = Vec::with_capacity(sample_count);
         for _ in 0..count {
-            let sc = u32::from_be_bytes(body[off..off + 4].try_into().unwrap()) as usize;
+            let sc = read_u32_at(body, off).ok_or_else(|| short(off + 4))? as usize;
             off += 4;
-            let gdi = if version >= 1 && index_type == 1 {
-                let v = u64::from_be_bytes(body[off..off + 8].try_into().unwrap());
+            let gdi = if wide {
+                let v = read_u64_at(body, off).ok_or_else(|| short(off + 8))?;
                 off += 8;
                 (v & 0xFFFF_FFFF) as u32
             } else {
-                let v = u32::from_be_bytes(body[off..off + 4].try_into().unwrap());
+                let v = read_u32_at(body, off).ok_or_else(|| short(off + 4))?;
                 off += 4;
                 v
             };
-            for _ in 0..sc {
-                out.push(gdi & 0xFFFF);
-            }
+            // never grow past the samples that exist
+            let room = sample_count.saturating_sub(out.len());
+            out.extend(core::iter::repeat_n(gdi & 0xFFFF, sc.min(room)));
         }
         out.resize(sample_count, 0);
         Ok(out)
@@ -951,15 +1006,17 @@ fn parse_one_aux_entry(aux: &[u8], per_sample_iv_size: u8) -> Option<SampleEncry
             };
 
             let seig_groups = find_box(traf, b"sgpd")
-                .filter(|b| &b[BOX_HEADER_MIN_SIZE + 4..BOX_HEADER_MIN_SIZE + 8] == SEIG_GROUPING_TYPE)
-                .and_then(|b| parse_seig_groups(&b[BOX_HEADER_MIN_SIZE..]).ok())
+                .and_then(|b| b.get(BOX_HEADER_MIN_SIZE..))
+                .filter(|b| b.get(4..8) == Some(SEIG_GROUPING_TYPE.as_slice()))
+                .and_then(|b| parse_seig_groups(b).ok())
                 .or_else(|| crypto.seig.as_ref().map(|d| d.groups.clone()));
             let local_groups = find_box(traf, b"sbgp")
-                .filter(|b| &b[BOX_HEADER_MIN_SIZE + 4..BOX_HEADER_MIN_SIZE + 8] == SEIG_GROUPING_TYPE)
+                .and_then(|b| b.get(BOX_HEADER_MIN_SIZE..))
+                .filter(|b| b.get(4..8) == Some(SEIG_GROUPING_TYPE.as_slice()))
                 .and_then(|b| {
                     traf_trun_sample_count(traf)
                         .ok()
-                        .and_then(|sc| parse_seig_sample_groups(&b[BOX_HEADER_MIN_SIZE..], sc).ok())
+                        .and_then(|sc| parse_seig_sample_groups(b, sc).ok())
                 });
 
             if let (Some(lg), Some(groups)) = (&local_groups, seig_groups) {
@@ -2154,21 +2211,22 @@ fn stsz_sizes(stbl: &[u8]) -> Result<Vec<usize>> {
         stsz[base + 6],
         stsz[base + 7],
     ]) as usize;
-    let mut sizes = Vec::with_capacity(count);
+    let mut sizes;
     if sample_size != 0 {
-        for _ in 0..count {
-            sizes.push(sample_size as usize);
+        if count > MAX_UNBACKED_COUNT {
+            return Err(Error::InvalidInput("stsz sample_count is implausibly large"));
         }
+        sizes = alloc::vec![sample_size as usize; count];
     } else {
         let table = base + 8;
-        let end = table + count * 4;
-        if stsz.len() < end {
+        if count > (stsz.len() - table) / 4 {
             return Err(Error::BufferTooShort {
-                need: end,
+                need: table.saturating_add(count.saturating_mul(4)),
                 have: stsz.len(),
                 what: "stsz sample_size table",
             });
         }
+        sizes = Vec::with_capacity(count);
         for i in 0..count {
             let o = table + i * 4;
             sizes.push(
@@ -2197,15 +2255,15 @@ fn sample_file_offsets(stbl: &[u8], sizes: &[usize]) -> Result<Vec<usize>> {
         stco[sc_base + 2],
         stco[sc_base + 3],
     ]) as usize;
-    let mut chunk_offsets = Vec::with_capacity(chunk_count);
     let co_table = sc_base + 4;
-    if stco.len() < co_table + chunk_count * 4 {
+    if chunk_count > (stco.len() - co_table) / 4 {
         return Err(Error::BufferTooShort {
-            need: co_table + chunk_count * 4,
+            need: co_table.saturating_add(chunk_count.saturating_mul(4)),
             have: stco.len(),
             what: "stco chunk offsets",
         });
     }
+    let mut chunk_offsets = Vec::with_capacity(chunk_count);
     for i in 0..chunk_count {
         let o = co_table + i * 4;
         chunk_offsets
@@ -2226,9 +2284,9 @@ fn sample_file_offsets(stbl: &[u8], sizes: &[usize]) -> Result<Vec<usize>> {
         stsc[sc_base + 3],
     ]) as usize;
     let sc_table = sc_base + 4;
-    if stsc.len() < sc_table + entry_count * 12 {
+    if entry_count > (stsc.len() - sc_table) / 12 {
         return Err(Error::BufferTooShort {
-            need: sc_table + entry_count * 12,
+            need: sc_table.saturating_add(entry_count.saturating_mul(12)),
             have: stsc.len(),
             what: "stsc entries",
         });
@@ -2260,7 +2318,7 @@ fn sample_file_offsets(stbl: &[u8], sizes: &[usize]) -> Result<Vec<usize>> {
                 break;
             }
             offsets.push(cursor);
-            cursor += sizes[sample_idx];
+            cursor = cursor.saturating_add(sizes[sample_idx]);
             sample_idx += 1;
         }
     }
@@ -2719,5 +2777,138 @@ mod fragment_default_chain_tests {
             "this fixture's video track has a non-trivial ctts -- expected at least one sample \
              with a real (non-zero) composition offset once ctts is actually read"
         );
+    }
+}
+
+#[cfg(test)]
+mod hardening_tests {
+    use super::*;
+
+    fn full_box(ty: &[u8; 4], body: &[u8]) -> Vec<u8> {
+        let mut b = ((body.len() + 8) as u32).to_be_bytes().to_vec();
+        b.extend_from_slice(ty);
+        b.extend_from_slice(body);
+        b
+    }
+
+    #[test]
+    fn keymap_debug_never_prints_key_bytes() {
+        let kid = [0x11u8; 16];
+        let key = [0xA7u8; 16];
+        let map = KeyMap::new().with_key(kid, key);
+        let dbg = format!("{map:?} {map:#?}");
+        assert!(dbg.contains("KeyMap"));
+        assert!(dbg.contains(&"11".repeat(16)), "KIDs may be listed");
+        assert!(!dbg.to_lowercase().contains("a7"), "key bytes leaked: {dbg}");
+        assert!(!dbg.contains("167"), "key bytes leaked as decimal: {dbg}");
+        assert_eq!(map.get(&kid), Some(&key));
+    }
+
+    #[test]
+    fn saiz_saio_truncated_or_oversized_do_not_panic() {
+        for len in 0..24 {
+            let body = vec![0u8, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 3];
+            let b = full_box(b"saiz", &body[..len.min(body.len())]);
+            let _ = parse_saiz_sizes(&b);
+            let mut o = vec![1u8, 0, 0, 1];
+            o.extend_from_slice(&[0; 12]);
+            let b = full_box(b"saio", &o[..len.min(o.len())]);
+            let _ = parse_saio_offsets(&b, 0);
+        }
+        // default size with a 4G count must not allocate
+        let mut body = vec![0u8, 0, 0, 0, 8];
+        body.extend_from_slice(&u32::MAX.to_be_bytes());
+        assert!(parse_saiz_sizes(&full_box(b"saiz", &body)).is_none());
+        // explicit table larger than the box
+        let mut body = vec![0u8, 0, 0, 0, 0];
+        body.extend_from_slice(&u32::MAX.to_be_bytes());
+        assert!(parse_saiz_sizes(&full_box(b"saiz", &body)).is_none());
+        // saio count larger than bytes (v0 and v1)
+        for v in [0u8, 1] {
+            let mut body = vec![v, 0, 0, 0];
+            body.extend_from_slice(&u32::MAX.to_be_bytes());
+            assert!(parse_saio_offsets(&full_box(b"saio", &body), 0).is_none());
+        }
+        // base_offset + offset overflow
+        let mut body = vec![1u8, 0, 0, 0, 0, 0, 0, 1];
+        body.extend_from_slice(&u64::MAX.to_be_bytes());
+        assert!(parse_saio_offsets(&full_box(b"saio", &body), 10).is_none());
+    }
+
+    #[test]
+    fn resolve_aux_with_wrapping_offsets_returns_none() {
+        let mut saiz = vec![0u8, 0, 0, 0, 16];
+        saiz.extend_from_slice(&1u32.to_be_bytes());
+        let mut saio = vec![1u8, 0, 0, 0, 0, 0, 0, 1];
+        saio.extend_from_slice(&(u64::MAX - 4).to_be_bytes());
+        let mut traf = full_box(b"saiz", &saiz);
+        traf.extend(full_box(b"saio", &saio));
+        let container = full_box(b"traf", &traf);
+        assert!(resolve_aux_from_saiz_saio(&[0u8; 64], &container, 8, 0).is_none());
+    }
+
+    #[test]
+    fn seig_parsers_reject_truncated_and_oversized_counts() {
+        let mut body = vec![1u8, 0, 0, 0];
+        body.extend_from_slice(b"seig");
+        body.extend_from_slice(&20u32.to_be_bytes());
+        body.extend_from_slice(&u32::MAX.to_be_bytes());
+        assert!(parse_seig_groups(&body).is_err());
+        for len in 0..body.len() {
+            let _ = parse_seig_groups(&body[..len]);
+        }
+        // version 0 with per-entry length prefix pointing past the end
+        let mut body = vec![0u8, 0, 0, 0];
+        body.extend_from_slice(b"seig");
+        body.extend_from_slice(&1u32.to_be_bytes());
+        body.extend_from_slice(&u32::MAX.to_be_bytes());
+        assert!(parse_seig_groups(&body).is_err());
+
+        // sbgp: huge entry count, then a huge sample_count run
+        let mut body = vec![0u8, 0, 0, 0];
+        body.extend_from_slice(b"seig");
+        body.extend_from_slice(&u32::MAX.to_be_bytes());
+        assert!(parse_seig_sample_groups(&body, 4).is_err());
+        let mut body = vec![0u8, 0, 0, 0];
+        body.extend_from_slice(b"seig");
+        body.extend_from_slice(&1u32.to_be_bytes());
+        body.extend_from_slice(&u32::MAX.to_be_bytes());
+        body.extend_from_slice(&1u32.to_be_bytes());
+        assert_eq!(parse_seig_sample_groups(&body, 3).unwrap(), vec![1, 1, 1]);
+        for len in 0..body.len() {
+            let _ = parse_seig_sample_groups(&body[..len], 3);
+        }
+    }
+
+    #[test]
+    fn stsz_stco_stsc_huge_counts_error_without_allocating() {
+        let mut b = vec![0u8; 4];
+        b.extend_from_slice(&8u32.to_be_bytes());
+        b.extend_from_slice(&u32::MAX.to_be_bytes());
+        let stbl = full_box(b"stbl", &full_box(b"stsz", &b));
+        assert!(stsz_sizes(&stbl).is_err());
+        let mut b = vec![0u8; 4];
+        b.extend_from_slice(&0u32.to_be_bytes());
+        b.extend_from_slice(&u32::MAX.to_be_bytes());
+        let stbl = full_box(b"stbl", &full_box(b"stsz", &b));
+        assert!(stsz_sizes(&stbl).is_err());
+        let mut co = vec![0u8; 4];
+        co.extend_from_slice(&u32::MAX.to_be_bytes());
+        let mut sc = vec![0u8; 4];
+        sc.extend_from_slice(&u32::MAX.to_be_bytes());
+        let mut inner = full_box(b"stsc", &sc);
+        inner.extend(full_box(b"stco", &co));
+        let stbl = full_box(b"stbl", &inner);
+        assert!(sample_file_offsets(&stbl, &[1, 2]).is_err());
+    }
+
+    #[test]
+    fn truncated_sgpd_box_in_traf_does_not_panic() {
+        let short_sgpd = full_box(b"sgpd", &[0, 0]);
+        let traf = full_box(b"traf", &short_sgpd);
+        let found = find_box(&traf, b"sgpd")
+            .and_then(|b| b.get(BOX_HEADER_MIN_SIZE..))
+            .filter(|b| b.get(4..8) == Some(b"seig".as_slice()));
+        assert!(found.is_none());
     }
 }

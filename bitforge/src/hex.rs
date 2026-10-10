@@ -1,5 +1,8 @@
 //! Hexadecimal encoding of raw byte fields.
 
+#[cfg(not(feature = "std"))]
+use alloc::string::String;
+
 /// Encodes `data` as a lowercase hexadecimal string.
 pub fn hex_encode(data: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";

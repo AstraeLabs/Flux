@@ -74,7 +74,7 @@ fn find_pmt_pid(buf: &[u8]) -> Result<u16> {
             continue;
         }
         let pointer = pkt.payload[0] as usize;
-        let section = &pkt.payload[1 + pointer..];
+        let section = pkt.payload.get(1 + pointer..).unwrap_or(&[]);
         if section.len() < 8 || section[0] != 0x00 {
             return Err(Error::InvalidInput("ts sample-aes: PAT section malformed or not table_id 0x00"));
         }
@@ -115,8 +115,8 @@ fn find_and_parse_pmt(buf: &[u8], pmt_pid: u16) -> Result<PmtLocation> {
         }
         let pointer = pkt.payload[0] as usize;
         let section_start = pkt.payload_offset + 1 + pointer;
-        let section = &buf[section_start..];
-        if section.len() < 12 || section[0] != 0x02 {
+        let section = buf.get(section_start..).unwrap_or(&[]);
+        if pointer + 1 > pkt.payload.len() || section.len() < 12 || section[0] != 0x02 {
             return Err(Error::InvalidInput("ts sample-aes: PMT section malformed or not table_id 0x02"));
         }
         let section_len = (((section[1] & 0x0F) as usize) << 8) | section[2] as usize;
@@ -135,7 +135,7 @@ fn find_and_parse_pmt(buf: &[u8], pmt_pid: u16) -> Result<PmtLocation> {
             });
             off += 5 + es_info_len;
         }
-        if off != end {
+        if off != end || end < 12 || end.saturating_add(4) > section.len() {
             return Err(Error::InvalidInput(
                 "ts sample-aes: PMT stream loop does not exactly cover the section (malformed \
                  ES_info_length chain)",
@@ -315,12 +315,18 @@ pub(crate) fn decrypt_ts_sample_aes(input: &[u8], key: &[u8; 16], iv: &[u8; 16])
             _ => None,
         };
         if let Some(ct) = clear_type {
-            out[s.stream_type_offset] = ct;
+            *out.get_mut(s.stream_type_offset)
+                .ok_or(Error::InvalidInput("ts sample-aes: stream_type offset out of range"))? = ct;
         }
     }
     let crc_input_start = pmt.section_start;
-    let new_crc = crc32_mpeg2(&out[crc_input_start..pmt.crc_offset]);
-    out[pmt.crc_offset..pmt.crc_offset + 4].copy_from_slice(&new_crc.to_be_bytes());
+    let new_crc = crc32_mpeg2(
+        out.get(crc_input_start..pmt.crc_offset)
+            .ok_or(Error::InvalidInput("ts sample-aes: PMT section out of range"))?,
+    );
+    out.get_mut(pmt.crc_offset..pmt.crc_offset + 4)
+        .ok_or(Error::InvalidInput("ts sample-aes: PMT CRC out of range"))?
+        .copy_from_slice(&new_crc.to_be_bytes());
 
     if let Some(v) = video {
         let gathered = gather_es(input, v.pid)?;
@@ -382,6 +388,23 @@ mod tests {
         assert_eq!(rebuilt, es);
         assert_eq!(&es[parts[0].1.clone()], &[0x67, 0xAA, 0xBB]);
         assert_eq!(&es[parts[1].1.clone()], &[0x41, 0xCC, 0xDD]);
+    }
+
+    #[test]
+    fn malformed_pat_pointer_field_does_not_panic() {
+        // PAT packet whose pointer_field (0xFF) runs past the packet.
+        let pkt = ts_packet(0, true, 0, &[0xFF, 0x00, 0xB0]);
+        assert!(find_pmt_pid(&pkt).is_err());
+    }
+
+    #[test]
+    fn malformed_pmt_does_not_panic() {
+        let mut p = vec![0x00u8, 0x02, 0xB0, 0xFF, 0, 0, 0, 0, 0, 0, 0xF0, 0x00];
+        p.extend_from_slice(&[0x1B, 0xE1, 0x00, 0xF0, 0xFF]);
+        let pkt = ts_packet(0x100, true, 0, &p);
+        assert!(find_and_parse_pmt(&pkt, 0x100).is_err());
+        let pkt = ts_packet(0x100, true, 0, &[0xFF]);
+        assert!(find_and_parse_pmt(&pkt, 0x100).is_err());
     }
 
     #[test]

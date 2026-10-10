@@ -67,7 +67,7 @@ fn parse_varint(bytes: &[u8], cursor: &mut usize) -> Result<(usize, usize)> {
         }
         let b = bytes[*cursor];
         *cursor += 1;
-        value = (value << 7) | (b & 0x7F) as usize;
+        value = (value << 7) | (b & 0x7F) as usize; // bounded by MAX_VARINT_BYTES (<= 28 bits)
         let bytes_so_far = *cursor - start;
         if bytes_so_far > MAX_VARINT_BYTES {
             return Err(Error::InvalidValue {
@@ -654,7 +654,14 @@ impl EsdsBox {
                 reason: "expected 'esds'",
             });
         }
-        let body = &data[header.header_size()..header.size as usize];
+        let end = usize::try_from(header.size).unwrap_or(usize::MAX);
+        let body = data
+            .get(header.header_size()..end)
+            .ok_or(Error::BufferTooShort {
+                need: end,
+                have: data.len(),
+                what: "esds box body",
+            })?;
         Self::parse_body(body)
     }
 
@@ -686,7 +693,14 @@ impl EsdsBox {
             });
         }
         let (size, _) = parse_varint(payload, &mut cursor)?;
-        let es_body = &payload[cursor..cursor + size];
+        let es_body = cursor
+            .checked_add(size)
+            .and_then(|end| payload.get(cursor..end))
+            .ok_or(Error::BufferTooShort {
+                need: cursor.saturating_add(size),
+                have: payload.len(),
+                what: "ES_Descriptor body",
+            })?;
         let es_descriptor = ESDescriptor::parse(es_body)?;
 
         Ok(Self { es_descriptor })
@@ -722,5 +736,25 @@ impl Serialize for EsdsBox {
         cursor += 4;
         cursor += self.es_descriptor.serialize_into(&mut buf[cursor..])?;
         Ok(cursor)
+    }
+}
+
+#[cfg(test)]
+mod hardening_tests {
+    use super::*;
+
+    #[test]
+    fn esds_descriptor_size_beyond_payload_errors() {
+        // FullBox extra + ES_DescrTag + 4-byte varint size = 0x0FFF_FFFF, no body.
+        let body = [0, 0, 0, 0, TAG_ES_DESCRIPTOR, 0xFF, 0xFF, 0xFF, 0x7F];
+        assert!(EsdsBox::parse_body(&body).is_err());
+    }
+
+    #[test]
+    fn esds_box_size_beyond_data_errors() {
+        let mut data = alloc::vec![0, 0, 0x10, 0x00];
+        data.extend_from_slice(b"esds");
+        data.extend_from_slice(&[0; 8]);
+        assert!(EsdsBox::parse_box(&data).is_err());
     }
 }

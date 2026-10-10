@@ -96,10 +96,17 @@ impl BitReader {
         let mut leading_zero_bits: u32 = 0;
         while self.has_bits(1) && self.read_bits(1, what)? == 0 {
             leading_zero_bits += 1;
+            if leading_zero_bits > 63 {
+                return Err(Error::BufferTooShort {
+                    need: self.bit_pos.saturating_add(leading_zero_bits as usize),
+                    have: self.data.len() * 8,
+                    what,
+                });
+            }
         }
         if leading_zero_bits > 0 && !self.has_bits(leading_zero_bits as usize) {
             return Err(Error::BufferTooShort {
-                need: self.bit_pos + leading_zero_bits as usize,
+                need: self.bit_pos.saturating_add(leading_zero_bits as usize),
                 have: self.data.len() * 8,
                 what,
             });
@@ -116,7 +123,44 @@ impl BitReader {
         if code_num & 1 == 0 {
             Ok(-((code_num >> 1) as i64))
         } else {
-            Ok(((code_num + 1) >> 1) as i64)
+            Ok((code_num / 2 + 1) as i64)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_ue_at_exact_eof_keeps_returning_zero() {
+        let mut r = BitReader::from_rbsp(&[0xFF], "t").unwrap();
+        for _ in 0..8 {
+            assert_eq!(r.read_ue("t").unwrap(), 0);
+        }
+        assert_eq!(r.read_ue("t").unwrap(), 0);
+    }
+
+    #[test]
+    fn read_ue_truncated_prefix_errors() {
+        let mut r = BitReader::from_rbsp(&[0x00], "t").unwrap();
+        assert!(r.read_ue("t").is_err());
+    }
+
+    #[test]
+    fn read_ue_many_zeros_no_panic() {
+        let mut r = BitReader::from_rbsp(&[0u8; 32], "t").unwrap();
+        assert!(r.read_ue("t").is_err());
+        let mut v = vec![0u8; 8];
+        v.push(0xFF);
+        let mut r = BitReader::from_rbsp(&v, "t").unwrap();
+        assert!(r.read_se("t").is_err());
+    }
+
+    #[test]
+    fn read_ue_basic() {
+        let mut r = BitReader::from_rbsp(&[0b0100_1100], "t").unwrap();
+        assert_eq!(r.read_ue("t").unwrap(), 1);
+        assert_eq!(r.read_ue("t").unwrap(), 2);
     }
 }

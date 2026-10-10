@@ -24,6 +24,17 @@ const ISOBMFF_LEADING_FOURCCS: [[u8; 4]; 4] = [*b"ftyp", *b"styp", *b"moov", *b"
 
 const EBML_HEADER_MAGIC: [u8; 4] = [0x1A, 0x45, 0xDF, 0xA3];
 
+/// Largest single allocation/read driven by a size field read from the input.
+#[cfg(feature = "cenc")]
+const MAX_SINGLE_READ: u64 = 256 << 20;
+/// Upper bounds for the tuning flags (KB / queue slots).
+const MAX_WRITER_BUF_KB: u32 = 64 * 1024;
+const MAX_PARALLEL_MIN_KB: u32 = 1 << 22;
+const MAX_IO_DEPTH: u32 = 256;
+/// Longest accepted daemon job line.
+#[cfg(all(feature = "cli", feature = "cenc"))]
+const MAX_DAEMON_LINE: usize = 1 << 20;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Container {
@@ -112,7 +123,7 @@ pub struct Args {
         short = 'o',
         long = "output",
         value_name = "PATH",
-        required_unless_present_any = ["dump", "extract_text"],
+        required_unless_present = "dump",
         help_heading = "Input/Output"
     )]
     pub output: Option<PathBuf>,
@@ -170,18 +181,30 @@ pub struct Args {
 
     /// Writer-thread output buffer size, in KB (default: 64)
     #[cfg(feature = "cenc")]
-    #[arg(long = "writer-buf-kb", value_name = "KB", help_heading = "Tuning")]
+    #[arg(
+        long = "writer-buf-kb",
+        value_name = "KB",
+        help_heading = "Tuning"
+    )]
     pub writer_buf_kb: Option<u32>,
 
     /// Byte threshold (in KB) above which a decrypt run is split across
     /// worker threads (default: 512)
     #[cfg(feature = "cenc")]
-    #[arg(long = "parallel-decrypt-min-kb", value_name = "KB", help_heading = "Tuning")]
+    #[arg(
+        long = "parallel-decrypt-min-kb",
+        value_name = "KB",
+        help_heading = "Tuning"
+    )]
     pub parallel_decrypt_min_kb: Option<u32>,
 
     /// Overlapped-read queue depth for the Windows IOCP read path (default: 8)
     #[cfg(feature = "cenc")]
-    #[arg(long = "io-depth", value_name = "N", help_heading = "Tuning")]
+    #[arg(
+        long = "io-depth",
+        value_name = "N",
+        help_heading = "Tuning"
+    )]
     pub io_depth: Option<u32>,
 
     /// Disable the [profile] timing/per-track diagnostics (on by default).
@@ -255,8 +278,9 @@ impl fmt::Display for CliError {
             CliError::NoTracksSelected => {
                 write!(f, "the --tracks selection matched no tracks in the input")
             }
-            CliError::BadKey(s) => {
-                write!(f, "invalid --key {s:?}: expected <32-hex-KID>:<32-hex-key>")
+            CliError::BadKey(reason) => {
+                // `reason` is a fixed description; it must never carry the key material.
+                write!(f, "invalid --key: {reason} (expected <32-hex-KID>:<32-hex-key>)")
             }
             CliError::UnsupportedSampleAes => write!(
                 f,
@@ -421,7 +445,7 @@ fn writer_buf_capacity() -> usize {
     let cli_kb: Option<usize> = None;
 
     cli_kb
-        .map(|kb| kb * 1024)
+        .map(|kb| (kb.min(MAX_WRITER_BUF_KB as usize)) * 1024)
         .unwrap_or(64 * 1024)
 }
 
@@ -429,7 +453,7 @@ fn writer_buf_capacity() -> usize {
 fn parallel_decrypt_threshold() -> usize {
     runtime_config()
         .parallel_decrypt_min_kb
-        .map(|kb| kb * 1024)
+        .map(|kb| kb.min(MAX_PARALLEL_MIN_KB as usize) * 1024)
         .unwrap_or(512 * 1024)
 }
 
@@ -442,7 +466,13 @@ fn decrypt_run_maybe_parallel(
     sizes: &[usize],
     scratch: &mut crate::cenc_decrypt::DecryptScratch,
 ) -> CliResult<()> {
-    let total: usize = sizes.iter().sum();
+    let total: usize = sizes
+        .iter()
+        .try_fold(0usize, |acc, &s| acc.checked_add(s))
+        .ok_or_else(|| invalid("sample sizes overflow"))?;
+    if total > buf.len() || entries.len() < sizes.len() {
+        return Err(invalid("sample layout does not match the data/crypto entries"));
+    }
     let n_threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1);
@@ -561,17 +591,82 @@ struct DaemonResult {
 }
 
 #[cfg(all(feature = "cli", feature = "cenc"))]
+#[derive(Debug, PartialEq, Eq)]
+enum LineRead {
+    Eof,
+    Line,
+    TooLong,
+}
+
+/// Read one newline-terminated line into `buf` (terminator excluded), never holding more than
+/// `max` bytes. An over-long line is drained to its end and reported as `TooLong`.
+#[cfg(all(feature = "cli", feature = "cenc"))]
+fn read_bounded_line<R: std::io::BufRead>(
+    r: &mut R,
+    max: usize,
+    buf: &mut Vec<u8>,
+) -> std::io::Result<LineRead> {
+    buf.clear();
+    let mut too_long = false;
+    let mut any = false;
+    loop {
+        let chunk = r.fill_buf()?;
+        if chunk.is_empty() {
+            break;
+        }
+        any = true;
+        let (take, found) = match chunk.iter().position(|&b| b == b'\n') {
+            Some(p) => (p, true),
+            None => (chunk.len(), false),
+        };
+        if !too_long {
+            if buf.len() + take > max {
+                too_long = true;
+                buf.clear();
+            } else {
+                buf.extend_from_slice(&chunk[..take]);
+            }
+        }
+        r.consume(take + usize::from(found));
+        if found {
+            break;
+        }
+    }
+    if too_long {
+        Ok(LineRead::TooLong)
+    } else if !any {
+        Ok(LineRead::Eof)
+    } else {
+        Ok(LineRead::Line)
+    }
+}
+
+#[cfg(all(feature = "cli", feature = "cenc"))]
 pub fn run_daemon() -> std::process::ExitCode {
-    use std::io::{BufRead, BufReader};
+    use std::io::BufReader;
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
+    // NOTE: `catch_unwind` below only has an effect in builds that unwind (dev/test). The
+    // release profile uses `panic = "abort"`, where a panic terminates the whole daemon
+    // process instead; job code must therefore return errors rather than rely on this.
     eprintln!("flux: daemon mode ready");
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
-    let reader = BufReader::new(stdin.lock());
+    let mut reader = BufReader::new(stdin.lock());
+    let mut raw: Vec<u8> = Vec::new();
 
-    for line in reader.lines() {
-        let Ok(line) = line else { break };
+    loop {
+        let line = match read_bounded_line(&mut reader, MAX_DAEMON_LINE, &mut raw) {
+            Ok(LineRead::Eof) | Err(_) => break,
+            Ok(LineRead::TooLong) => {
+                let resp = "{\"ok\":false,\"error\":\"job line exceeds the maximum length (1 MiB); skipped\"}";
+                if writeln!(stdout, "{resp}").is_err() || stdout.flush().is_err() {
+                    break;
+                }
+                continue;
+            }
+            Ok(LineRead::Line) => String::from_utf8_lossy(&raw).into_owned(),
+        };
         let line = line.trim();
         if line.is_empty() {
             continue;
@@ -601,7 +696,7 @@ pub fn run_daemon() -> std::process::ExitCode {
                         },
                         Err(_) => DaemonResult {
                             ok: false,
-                            error: Some("panic during scan (job skipped, daemon still alive)".to_string()),
+                            error: Some("panic during scan (job aborted)".to_string()),
                             elapsed_ms: None,
                             tracks: None,
                             scan_cut: None,
@@ -654,7 +749,7 @@ pub fn run_daemon() -> std::process::ExitCode {
                     },
                     Err(_) => DaemonResult {
                         ok: false,
-                        error: Some("panic during decrypt (job skipped, daemon still alive)".to_string()),
+                        error: Some("panic during decrypt (job aborted)".to_string()),
                         elapsed_ms: None,
                         tracks: None,
                         scan_cut: None,
@@ -690,27 +785,98 @@ pub fn run_daemon() -> std::process::ExitCode {
     std::process::ExitCode::SUCCESS
 }
 
+/// Canonicalize `p`; when it does not exist yet (a fresh output), canonicalize its parent
+/// and re-attach the file name so the result is still comparable.
+fn canonical_or_parent(p: &Path) -> Option<PathBuf> {
+    if let Ok(c) = fs::canonicalize(p) {
+        return Some(c);
+    }
+    let name = p.file_name()?;
+    let parent = match p.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d,
+        _ => Path::new("."),
+    };
+    Some(fs::canonicalize(parent).ok()?.join(name))
+}
+
+/// True when `a` and `b` name the same file (after resolving symlinks / `..`), including
+/// the case where one of them does not exist yet.
+fn same_file(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    match (canonical_or_parent(a), canonical_or_parent(b)) {
+        (Some(x), Some(y)) => x == y,
+        _ => false,
+    }
+}
+
+/// Refuse an output path that would overwrite one of the inputs.
+fn ensure_output_distinct(inputs: &[&Path], out: &Path) -> CliResult<()> {
+    for i in inputs {
+        if same_file(i, out) {
+            return Err(CliError::Flux(crate::Error::InvalidInput(
+                "output path is the same file as an input; refusing to overwrite it",
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub fn run(args: Args) -> CliResult<(Container, OutputFormat)> {
     #[cfg(not(feature = "cenc"))]
-    return Err(CliError::Flux(crate::Error::InvalidInput(
-        "this build requires the `cenc` feature (decrypt-to-progressive-MP4 is the only \
-         supported operation)",
-    )));
+    {
+        let _ = args;
+        return Err(CliError::Flux(crate::Error::InvalidInput(
+            "this build requires the `cenc` feature (decrypt-to-progressive-MP4 is the only \
+             supported operation)",
+        )));
+    }
 
     #[cfg(feature = "cenc")]
     {
-        init_runtime_config(&args);
-        let in_path = input_path(&args).to_path_buf();
+        let mut args = args;
+        let result = run_guarded(&args);
+        for k in args.keys.iter_mut() {
+            wipe_string(k);
+        }
+        result
+    }
+}
+
+#[cfg(feature = "cenc")]
+fn run_guarded(args: &Args) -> CliResult<(Container, OutputFormat)> {
+    if args.dump {
+        return run_impl(args, None);
+    }
+    let Some(out) = args.output.as_deref() else {
+        return Err(CliError::Flux(crate::Error::InvalidInput(
+            "-o/--output is required",
+        )));
+    };
+    let in_path = input_path(args);
+    let mut inputs: Vec<&Path> = vec![in_path];
+    if let Some(init) = args.fragments_info.as_deref() {
+        inputs.push(init);
+    }
+    ensure_output_distinct(&inputs, out)?;
+    run_impl(args, Some(out))
+}
+
+#[cfg(feature = "cenc")]
+fn run_impl(args: &Args, output: Option<&Path>) -> CliResult<(Container, OutputFormat)> {
+    {
+        init_runtime_config(args);
+        let in_path = input_path(args).to_path_buf();
 
         if args.dump {
             dump::dump_streams(&in_path, &args.tracks, args.json)?;
             return Ok((Container::Mp4, OutputFormat::Progressive));
         }
 
-        let output = args
-            .output
-            .as_deref()
-            .expect("clap requires -o/--output unless --dump");
+        let output = output.ok_or(CliError::Flux(crate::Error::InvalidInput(
+            "-o/--output is required",
+        )))?;
 
         if args.extract_text {
             extract_text::extract_text(&in_path, &args.tracks, output)?;
@@ -782,7 +948,7 @@ pub fn run(args: Args) -> CliResult<(Container, OutputFormat)> {
             return Err(CliError::UnsupportedSampleAes);
         }
 
-        let format = resolve_format(&args)?;
+        let format = resolve_format(args)?;
 
         let __profile = profile_enabled();
         let __tf = std::time::Instant::now();
@@ -1044,14 +1210,50 @@ fn scan_top_level_boxes(file: &mut fs::File) -> CliResult<Vec<TopLevelBox>> {
                  streaming --decrypt scan",
             )));
         }
+        if header.size < BOX_HEADER_MIN_SIZE as u64 {
+            return Err(CliError::Flux(crate::Error::InvalidInput(
+                "top-level box size is smaller than a box header",
+            )));
+        }
         boxes.push(TopLevelBox {
             box_type: header.box_type.0,
             offset,
             size: header.size,
         });
-        offset += header.size;
+        match offset.checked_add(header.size) {
+            Some(end) if end <= file_len => offset = end,
+            _ => break,
+        }
     }
     Ok(boxes)
+}
+
+fn invalid(msg: &'static str) -> CliError {
+    CliError::Flux(crate::Error::InvalidInput(msg))
+}
+
+/// `offset + size`, rejecting arithmetic wrap and boxes that run past `len`.
+fn checked_box_end(offset: u64, size: u64, len: u64) -> CliResult<u64> {
+    match offset.checked_add(size) {
+        Some(end) if end <= len => Ok(end),
+        _ => Err(invalid(
+            "box extends past the end of the data (truncated or corrupt input)",
+        )),
+    }
+}
+
+/// Read `size` bytes at `offset`, refusing ranges beyond the file's actual length before
+/// allocating anything.
+#[cfg(feature = "cenc")]
+fn read_region(file: &mut fs::File, offset: u64, size: u64) -> CliResult<Vec<u8>> {
+    // The allocation is bounded by the real file length, so no extra cap is needed.
+    let len = file.metadata()?.len();
+    checked_box_end(offset, size, len)?;
+    let size = usize::try_from(size).map_err(|_| invalid("box does not fit in memory"))?;
+    let mut buf = vec![0u8; size];
+    file.seek(SeekFrom::Start(offset))?;
+    file.read_exact(&mut buf)?;
+    Ok(buf)
 }
 
 #[cfg(feature = "cenc")]
@@ -1073,9 +1275,10 @@ fn input_has_fps_marker(in_path: &Path) -> CliResult<bool> {
         if !CONTAINER_TYPES.contains(&b.box_type) {
             continue;
         }
-        let mut buf = vec![0u8; b.size as usize];
-        file.seek(SeekFrom::Start(b.offset))?;
-        if file.read_exact(&mut buf).is_err() {
+        let Ok(buf) = read_region(&mut file, b.offset, b.size) else {
+            continue;
+        };
+        if buf.len() < BOX_FOURCC_OFFSET + 4 {
             continue;
         }
         if box_tree_contains(&buf[BOX_FOURCC_OFFSET + 4..], b"4snf") {
@@ -1103,9 +1306,14 @@ fn box_tree_contains(data: &[u8], target: &[u8; 4]) -> bool {
             let box_size = if header.size == 0 {
                 data.len() - offset
             } else {
-                header.size as usize
+                match usize::try_from(header.size) {
+                    Ok(v) => v,
+                    Err(_) => break,
+                }
             };
-            if box_size < hdr_len || offset + box_size > data.len() {
+            // `box_size > remaining` instead of `offset + box_size > len` (no wrap), and
+            // a box smaller than its header would never advance.
+            if box_size < hdr_len || hdr_len == 0 || box_size > data.len() - offset {
                 break;
             }
             if header.box_type.is(target) {
@@ -1134,13 +1342,20 @@ fn read_contiguous_run(
     scratch: &mut Vec<u8>,
 ) -> CliResult<(usize, usize)> {
     let first = &layouts[0];
+    let file_len = file.metadata()?.len();
     let mut run_len = 1;
-    let mut end = first.file_offset + first.size as u64;
+    let mut end = checked_box_end(first.file_offset, first.size as u64, file_len)?;
     for layout in &layouts[1..] {
         if layout.file_offset != end {
             break;
         }
-        end += layout.size as u64;
+        let Ok(next_end) = checked_box_end(end, layout.size as u64, file_len) else {
+            break;
+        };
+        if next_end - first.file_offset > MAX_SINGLE_READ {
+            break;
+        }
+        end = next_end;
         run_len += 1;
     }
     let needed = (end - first.file_offset) as usize;
@@ -1174,10 +1389,15 @@ fn split_into_contiguous_runs(
     let mut runs = Vec::new();
     let mut i = 0;
     while i < layouts.len() {
-        let mut end = layouts[i].file_offset + layouts[i].size as u64;
+        let start = layouts[i].file_offset;
+        let mut end = start.saturating_add(layouts[i].size as u64);
         let mut count = 1;
         while i + count < layouts.len() && layouts[i + count].file_offset == end {
-            end += layouts[i + count].size as u64;
+            let next = end.saturating_add(layouts[i + count].size as u64);
+            if next == u64::MAX || next - start > MAX_SINGLE_READ {
+                break;
+            }
+            end = next;
             count += 1;
         }
         runs.push((i, count));
@@ -1191,6 +1411,7 @@ fn io_depth() -> usize {
     runtime_config()
         .io_depth
         .filter(|&n| n > 0)
+        .map(|n| n.min(MAX_IO_DEPTH as usize))
         .unwrap_or(8)
 }
 
@@ -1212,6 +1433,7 @@ fn run_pass2(
 ) -> CliResult<()> {
     let mut job_plan: Vec<(usize, usize, usize)> = Vec::new();
     let mut jobs: Vec<(u64, usize)> = Vec::new();
+    let in_len = fs::metadata(in_path)?.len();
     for &(track_idx, start, count) in chunk_plan {
         let layouts = &track_layout[track_idx][start..start + count];
         for (local_start, local_count) in split_into_contiguous_runs(layouts) {
@@ -1221,6 +1443,7 @@ fn run_pass2(
                 .iter()
                 .map(|l| l.size as usize)
                 .sum();
+            checked_box_end(file_offset, byte_len as u64, in_len)?;
             job_plan.push((track_idx, abs_start, local_count));
             jobs.push((file_offset, byte_len));
         }
@@ -1253,12 +1476,18 @@ fn run_pass2(
 
             let (track_idx, start, count) = job_plan[next_expected];
             let track_id = target_track_ids[track_idx];
-            let crypto_track = crypto_tracks
-                .iter()
-                .find(|t| t.track_id == track_id)
-                .expect("target_track_ids is drawn from crypto_tracks' own track_ids");
+            let Some(crypto_track) = crypto_tracks.iter().find(|t| t.track_id == track_id) else {
+                result = Err(invalid("no crypto metadata for a selected track"));
+                return false;
+            };
             let key = track_keys[track_idx];
-            let entries = &track_crypto[track_idx][start..start + count];
+            // Clear tracks carry no per-sample crypto entries; only slice them when a key
+            // is in play (the sample-count match was verified for those in the caller).
+            let entries: &[crate::cenc::SampleEncryptionEntry] = if key.is_some() {
+                &track_crypto[track_idx][start..start + count]
+            } else {
+                &[]
+            };
             let layouts = &track_layout[track_idx][start..start + count];
 
             if let Some(key) = &key {
@@ -1321,10 +1550,14 @@ fn run_pass2(
         let crypto_track = crypto_tracks
             .iter()
             .find(|t| t.track_id == track_id)
-            .expect("target_track_ids is drawn from crypto_tracks' own track_ids");
+            .ok_or_else(|| invalid("no crypto metadata for a selected track"))?;
         let key = track_keys[track_idx];
         let layouts = &track_layout[track_idx][start..start + count];
-        let entries = &track_crypto[track_idx][start..start + count];
+        let entries: &[crate::cenc::SampleEncryptionEntry] = if key.is_some() {
+            &track_crypto[track_idx][start..start + count]
+        } else {
+            &[]
+        };
 
         let mut idx = 0;
         while idx < layouts.len() {
@@ -1417,9 +1650,7 @@ fn stream_decrypt_to_progressive_mp4(
         return Ok(false);
     }
 
-    let mut moov_bytes = vec![0u8; moov_box.size as usize];
-    file.seek(SeekFrom::Start(moov_box.offset))?;
-    file.read_exact(&mut moov_bytes)?;
+    let moov_bytes = read_region(&mut file, moov_box.offset, moov_box.size)?;
     let (movie_timescale, specs) = cenc_decrypt::harvest_moov_track_specs(&moov_bytes)?;
     let crypto_tracks = cenc_decrypt::harvest_moov_crypto(&moov_bytes)?;
     let trex_defaults = cenc_decrypt::harvest_trex_defaults(&moov_bytes);
@@ -1537,9 +1768,7 @@ fn stream_decrypt_to_progressive_mp4(
     let mut __pass1_io = std::time::Duration::ZERO;
     let mut __pass1_parse = std::time::Duration::ZERO;
     let aux_file: Option<Vec<u8>> = if let Some(first) = moof_boxes.first() {
-        let mut first_moof = vec![0u8; first.size as usize];
-        file.seek(SeekFrom::Start(first.offset))?;
-        file.read_exact(&mut first_moof)?;
+        let first_moof = read_region(&mut file, first.offset, first.size)?;
         if cenc_decrypt::fragment_aux_info_requires_mdat(&first_moof) {
             Some(fs::read(in_path)?)
         } else {
@@ -1550,9 +1779,7 @@ fn stream_decrypt_to_progressive_mp4(
     };
     for moof_box in &moof_boxes {
         let __s = std::time::Instant::now();
-        let mut moof_bytes = vec![0u8; moof_box.size as usize];
-        file.seek(SeekFrom::Start(moof_box.offset))?;
-        file.read_exact(&mut moof_bytes)?;
+        let moof_bytes = read_region(&mut file, moof_box.offset, moof_box.size)?;
         __pass1_io += __s.elapsed();
 
         let __s = std::time::Instant::now();
@@ -1569,7 +1796,7 @@ fn stream_decrypt_to_progressive_mp4(
             let track_idx = target_track_ids
                 .iter()
                 .position(|&id| id == ft.track_id)
-                .expect("harvest_fragment only returns tracks from target_track_ids");
+                .ok_or_else(|| invalid("fragment references a track that was not selected"))?;
             let start = track_layout[track_idx].len();
             let count = ft.layout.len();
             if count > 0 {
@@ -1666,10 +1893,10 @@ fn stream_decrypt_to_progressive_mp4(
 
     let mut track_keys: Vec<Option<[u8; 16]>> = Vec::with_capacity(target_track_ids.len());
     'setup: for (track_idx, &track_id) in target_track_ids.iter().enumerate() {
-        let crypto_track = crypto_tracks
-            .iter()
-            .find(|t| t.track_id == track_id)
-            .expect("target_track_ids is drawn from crypto_tracks' own track_ids");
+        let Some(crypto_track) = crypto_tracks.iter().find(|t| t.track_id == track_id) else {
+            result = Err(invalid("no crypto metadata for a selected track"));
+            break 'setup;
+        };
         let key = if crypto_track.tenc.default_is_protected != 0 {
             match key_map.get(&crypto_track.tenc.default_kid) {
                 Some(k) => Some(*k),
@@ -1853,13 +2080,20 @@ fn read_contiguous_run_stbl(
     scratch: &mut Vec<u8>,
 ) -> CliResult<(usize, usize)> {
     let first = &layouts[0];
+    let file_len = file.metadata()?.len();
     let mut run_len = 1;
-    let mut end = first.file_offset + first.size as u64;
+    let mut end = checked_box_end(first.file_offset, first.size as u64, file_len)?;
     for layout in &layouts[1..] {
         if layout.file_offset != end {
             break;
         }
-        end += layout.size as u64;
+        let Ok(next_end) = checked_box_end(end, layout.size as u64, file_len) else {
+            break;
+        };
+        if next_end - first.file_offset > MAX_SINGLE_READ {
+            break;
+        }
+        end = next_end;
         run_len += 1;
     }
     let needed = (end - first.file_offset) as usize;
@@ -1917,9 +2151,7 @@ fn stream_decrypt_progressive_to_progressive_mp4(
     }
     let __t1 = std::time::Instant::now();
 
-    let mut moov_bytes = vec![0u8; moov_box.size as usize];
-    file.seek(SeekFrom::Start(moov_box.offset))?;
-    file.read_exact(&mut moov_bytes)?;
+    let moov_bytes = read_region(&mut file, moov_box.offset, moov_box.size)?;
     let aux_file: Vec<u8> = if cenc_decrypt::progressive_aux_info_requires_mdat(&moov_bytes) {
         fs::read(in_path)?
     } else {
@@ -2047,7 +2279,7 @@ fn stream_decrypt_progressive_to_progressive_mp4(
             .tracks
             .iter()
             .find(|t| t.tkhd.track_id == track_id)
-            .expect("target_track_ids is drawn from harvest_moov_track_specs' own track_ids");
+            .ok_or_else(|| invalid("selected track not found in the moov box"))?;
         track_layout.push(stbl_sample_layout(trak)?);
     }
     if __profile {
@@ -2123,10 +2355,10 @@ fn stream_decrypt_progressive_to_progressive_mp4(
     let key_sanity_on = key_sanity_check_enabled();
     let mut key_sanity_checked = vec![false; target_track_ids.len()];
     'outer: for (track_idx, &track_id) in target_track_ids.iter().enumerate() {
-        let crypto_track = crypto_tracks
-            .iter()
-            .find(|t| t.track_id == track_id)
-            .expect("target_track_ids is drawn from crypto_tracks' own track_ids");
+        let Some(crypto_track) = crypto_tracks.iter().find(|t| t.track_id == track_id) else {
+            result = Err(invalid("no crypto metadata for a selected track"));
+            break 'outer;
+        };
         let key = if crypto_track.tenc.default_is_protected != 0 {
             match key_map.get(&crypto_track.tenc.default_kid) {
                 Some(k) => Some(*k),
@@ -2252,12 +2484,18 @@ fn scan_top_level_boxes_in_memory(data: &[u8]) -> CliResult<Vec<TopLevelBox>> {
                  --fragments-info",
             )));
         }
+        if header.size < header.header_size() as u64 {
+            return Err(invalid("top-level box size is smaller than its header"));
+        }
         boxes.push(TopLevelBox {
             box_type: header.box_type.0,
             offset: offset as u64,
             size: header.size,
         });
-        offset += header.size as usize;
+        match (offset as u64).checked_add(header.size) {
+            Some(end) if end <= data.len() as u64 => offset = end as usize,
+            _ => break,
+        }
     }
     Ok(boxes)
 }
@@ -2334,7 +2572,10 @@ fn decrypt_fragment(
     let mut next_dts: std::collections::BTreeMap<u32, i64> = std::collections::BTreeMap::new();
     let mut cbc_scratch = crate::cenc_decrypt::DecryptScratch::default();
     for &(moof_off, moof_size) in &moof_boxes {
-        let moof_bytes = data[moof_off as usize..(moof_off + moof_size) as usize].to_vec();
+        let moof_bytes = data
+            .get(moof_off as usize..(moof_off + moof_size) as usize)
+            .ok_or_else(|| invalid("moof extends past the end of the data"))?
+            .to_vec();
         let fragment_tracks = cenc_decrypt::harvest_fragment(
             moof_off,
             &moof_bytes,
@@ -2367,8 +2608,9 @@ fn decrypt_fragment(
 
             let sizes: Vec<usize> = ft.layout.iter().map(|l| l.size as usize).collect();
             for (run_start, run_len) in split_into_contiguous_runs(&ft.layout) {
-                let buf_start = ft.layout[run_start].file_offset as usize;
-                let buf_end = buf_start + sizes[run_start..run_start + run_len].iter().sum::<usize>();
+                let run_bytes = sizes[run_start..run_start + run_len].iter().sum::<usize>();
+                let buf_start = usize::try_from(ft.layout[run_start].file_offset).unwrap_or(usize::MAX);
+                let buf_end = buf_start.saturating_add(run_bytes);
                 if buf_end > data.len() {
                     return Err(CliError::Flux(crate::Error::BufferTooShort {
                         need: buf_end,
@@ -2396,9 +2638,12 @@ fn decrypt_fragment(
             {
                 key_sanity_checked.insert(ft.track_id);
                 if let Some(cfg) = track_codecs.get(&ft.track_id) {
-                    let start = ft.layout[idx].file_offset as usize;
-                    let end = start + sizes[idx];
-                    if let Err(detail) = key_sanity::check_first_sample(cfg, &data[start..end], ffmpeg_path) {
+                    let start = usize::try_from(ft.layout[idx].file_offset).unwrap_or(usize::MAX);
+                    let end = start.saturating_add(sizes[idx]);
+                    let sample = data
+                        .get(start..end)
+                        .ok_or_else(|| invalid("sample extends past the end of the data"))?;
+                    if let Err(detail) = key_sanity::check_first_sample(cfg, sample, ffmpeg_path) {
                         return Err(CliError::KeySanityCheckFailed {
                             track_id: ft.track_id,
                             detail,
@@ -2491,23 +2736,195 @@ fn alloc_vec_of_empty<T>(n: usize) -> Vec<Vec<T>> {
 
 #[cfg(feature = "cenc")]
 fn parse_key(spec: &str) -> CliResult<([u8; 16], [u8; 16])> {
+    // Errors carry only a fixed reason, never any part of `spec`.
     let (kid_hex, key_hex) = spec
         .split_once(':')
-        .ok_or_else(|| CliError::BadKey(spec.to_string()))?;
-    let kid = parse_hex16(kid_hex).ok_or_else(|| CliError::BadKey(spec.to_string()))?;
-    let key = parse_hex16(key_hex).ok_or_else(|| CliError::BadKey(spec.to_string()))?;
+        .ok_or_else(|| CliError::BadKey("missing ':' separator".to_string()))?;
+    let kid = parse_hex16(kid_hex)
+        .ok_or_else(|| CliError::BadKey("KID must be 32 hex chars".to_string()))?;
+    let key = parse_hex16(key_hex)
+        .ok_or_else(|| CliError::BadKey("key must be 32 hex chars".to_string()))?;
     Ok((kid, key))
 }
 
 #[cfg(feature = "cenc")]
 fn parse_hex16(s: &str) -> Option<[u8; 16]> {
-    let s = s.trim();
-    if s.len() != 32 {
+    fn nibble(b: u8) -> Option<u8> {
+        match b {
+            b'0'..=b'9' => Some(b - b'0'),
+            b'a'..=b'f' => Some(b - b'a' + 10),
+            b'A'..=b'F' => Some(b - b'A' + 10),
+            _ => None,
+        }
+    }
+    let b = s.trim().as_bytes();
+    if b.len() != 32 {
         return None;
     }
     let mut out = [0u8; 16];
     for (i, byte) in out.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()?;
+        *byte = (nibble(b[i * 2])? << 4) | nibble(b[i * 2 + 1])?;
     }
     Some(out)
+}
+
+/// Best-effort overwrite of a secret string before it is dropped.
+#[cfg(feature = "cenc")]
+fn wipe_string(s: &mut String) {
+    let mut bytes = std::mem::take(s).into_bytes();
+    for b in bytes.iter_mut() {
+        *b = 0;
+    }
+    std::hint::black_box(&bytes);
+}
+
+#[cfg(all(test, feature = "cenc"))]
+mod hardening_tests {
+    use super::*;
+
+    const KID: &str = "00112233445566778899aabbccddeeff";
+
+    fn scratch_dir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("flux-cli-test-{}-{tag}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn parse_key_accepts_valid_pair() {
+        let (kid, key) = parse_key(&format!("{KID}:{KID}")).unwrap();
+        assert_eq!(kid[0], 0x00);
+        assert_eq!(key[15], 0xff);
+    }
+
+    #[test]
+    fn parse_key_errors_never_echo_the_key() {
+        let secret = "deadbeefdeadbeefdeadbeefdeadbeef";
+        for spec in [
+            format!("{KID}:{secret}zz"),
+            format!("{KID}:{}", &secret[..30]),
+            format!("{secret}-{KID}"),
+            format!("zz{}:{KID}", &secret[2..]),
+            secret.to_string(),
+        ] {
+            let msg = parse_key(&spec).unwrap_err().to_string();
+            assert!(!msg.contains("deadbeef"), "leaked key in: {msg}");
+            assert!(!msg.contains(&spec), "leaked spec in: {msg}");
+        }
+        let msg = parse_key(&format!("{KID}:nothex")).unwrap_err().to_string();
+        assert!(msg.contains("key must be 32 hex chars"));
+        let msg = parse_key(&format!("nothex:{KID}")).unwrap_err().to_string();
+        assert!(msg.contains("KID must be 32 hex chars"));
+    }
+
+    #[test]
+    fn parse_hex16_rejects_non_ascii_without_panicking() {
+        // 16 two-byte chars = 32 bytes: passes a naive length check, then would split a
+        // char boundary when slicing the &str.
+        let multibyte: String = "\u{e9}".repeat(16);
+        assert_eq!(multibyte.len(), 32);
+        assert_eq!(parse_hex16(&multibyte), None);
+        assert_eq!(parse_hex16(&format!("{}\u{e9}", &KID[..30])), None);
+        assert_eq!(parse_hex16(&format!("+{}", &KID[..31])), None);
+        assert!(parse_hex16(KID).is_some());
+        assert!(parse_hex16(&KID.to_uppercase()).is_some());
+    }
+
+    #[test]
+    fn same_file_detects_aliases_and_nonexistent_outputs() {
+        let dir = scratch_dir("samefile");
+        let input = dir.join("in.mp4");
+        fs::write(&input, b"x").unwrap();
+
+        let alias = dir.join(".").join("in.mp4");
+        assert!(same_file(&input, &alias));
+        assert!(ensure_output_distinct(&[&input], &alias).is_err());
+
+        let sub = dir.join("sub");
+        fs::create_dir_all(&sub).unwrap();
+        let dotdot = sub.join("..").join("in.mp4");
+        assert!(ensure_output_distinct(&[&input], &dotdot).is_err());
+
+        let fresh = dir.join("out.mp4");
+        assert!(!fresh.exists());
+        assert!(ensure_output_distinct(&[&input], &fresh).is_ok());
+        assert!(!same_file(&input, &fresh));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn checked_box_end_rejects_wrap_and_overrun() {
+        assert!(checked_box_end(u64::MAX - 3, 8, u64::MAX).is_err());
+        assert!(checked_box_end(u64::MAX, u64::MAX, u64::MAX).is_err());
+        assert!(checked_box_end(0, 10, 5).is_err());
+        assert_eq!(checked_box_end(4, 6, 10).unwrap(), 10);
+    }
+
+    #[test]
+    fn in_memory_scan_keeps_truncated_trailing_box_without_failing() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&100u32.to_be_bytes());
+        data.extend_from_slice(b"free");
+        data.extend_from_slice(&[0u8; 4]);
+        let boxes = scan_top_level_boxes_in_memory(&data).unwrap();
+        assert_eq!(boxes.len(), 1);
+        assert_eq!(boxes[0].size, 100);
+
+        let mut ok = Vec::new();
+        ok.extend_from_slice(&12u32.to_be_bytes());
+        ok.extend_from_slice(b"free");
+        ok.extend_from_slice(&[0u8; 4]);
+        let boxes = scan_top_level_boxes_in_memory(&ok).unwrap();
+        assert_eq!(boxes.len(), 1);
+        assert_eq!(boxes[0].size, 12);
+    }
+
+    #[test]
+    fn box_tree_contains_survives_oversized_box_sizes() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&u32::MAX.to_be_bytes());
+        data.extend_from_slice(b"moov");
+        data.extend_from_slice(&[0u8; 8]);
+        assert!(!box_tree_contains(&data, b"4snf"));
+
+        let mut small = Vec::new();
+        small.extend_from_slice(&4u32.to_be_bytes());
+        small.extend_from_slice(b"moov");
+        assert!(!box_tree_contains(&small, b"4snf"));
+    }
+
+    #[test]
+    fn read_region_rejects_sizes_beyond_the_file() {
+        let dir = scratch_dir("readregion");
+        let p = dir.join("f.bin");
+        fs::write(&p, [1u8; 64]).unwrap();
+        let mut f = fs::File::open(&p).unwrap();
+        assert!(read_region(&mut f, 0, u64::MAX).is_err());
+        assert!(read_region(&mut f, 60, 8).is_err());
+        assert!(read_region(&mut f, u64::MAX, 2).is_err());
+        assert_eq!(read_region(&mut f, 60, 4).unwrap().len(), 4);
+        drop(f);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn bounded_line_reader_caps_line_length() {
+        let mut buf = Vec::new();
+        let mut r = std::io::Cursor::new(b"abc\nxxxxxxxxxxxxxxxx\nok\n".to_vec());
+        assert_eq!(read_bounded_line(&mut r, 8, &mut buf).unwrap(), LineRead::Line);
+        assert_eq!(buf, b"abc");
+        assert_eq!(read_bounded_line(&mut r, 8, &mut buf).unwrap(), LineRead::TooLong);
+        assert_eq!(read_bounded_line(&mut r, 8, &mut buf).unwrap(), LineRead::Line);
+        assert_eq!(buf, b"ok");
+        assert_eq!(read_bounded_line(&mut r, 8, &mut buf).unwrap(), LineRead::Eof);
+    }
+
+    #[test]
+    fn wipe_string_empties_the_string() {
+        let mut s = String::from("00112233445566778899aabbccddeeff:00112233445566778899aabbccddeeff");
+        wipe_string(&mut s);
+        assert!(s.is_empty());
+    }
 }

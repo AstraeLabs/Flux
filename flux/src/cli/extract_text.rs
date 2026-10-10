@@ -1,14 +1,13 @@
 //! `--extract-text`: extract a WebVTT-in-fMP4 (`wvtt`)
 
 use core::fmt::Write as _;
-use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use super::{CliError, CliResult, open_sequential, scan_top_level_boxes};
+use super::{CliError, CliResult, open_sequential, read_region, scan_top_level_boxes};
 use crate::cenc_decrypt;
 use crate::pipeline::{CodecConfig, SubtitleFormat};
 use crate::VttCueBox;
@@ -28,9 +27,7 @@ pub(super) fn extract_text(in_path: &Path, tracks_filter: &[u32], output: &Path)
         return Err(CliError::Flux(crate::Error::UnexpectedBox { expected: "moov" }));
     };
 
-    let mut moov_bytes = vec![0u8; moov_box.size as usize];
-    file.seek(SeekFrom::Start(moov_box.offset))?;
-    file.read_exact(&mut moov_bytes)?;
+    let moov_bytes = read_region(&mut file, moov_box.offset, moov_box.size)?;
 
     let (_movie_timescale, specs) = cenc_decrypt::harvest_moov_track_specs(&moov_bytes)?;
     let trex_defaults = cenc_decrypt::harvest_trex_defaults(&moov_bytes);
@@ -56,9 +53,7 @@ pub(super) fn extract_text(in_path: &Path, tracks_filter: &[u32], output: &Path)
     let mut cues: Vec<Cue> = Vec::new();
 
     for moof_box in top_level.iter().filter(|b| &b.box_type == b"moof") {
-        let mut moof_bytes = vec![0u8; moof_box.size as usize];
-        file.seek(SeekFrom::Start(moof_box.offset))?;
-        file.read_exact(&mut moof_bytes)?;
+        let moof_bytes = read_region(&mut file, moof_box.offset, moof_box.size)?;
         let Ok((bx, _)) = crate::box_types::parse_box(&moof_bytes) else {
             continue;
         };
@@ -82,9 +77,7 @@ pub(super) fn extract_text(in_path: &Path, tracks_filter: &[u32], output: &Path)
             if sample.size < 8 {
                 continue;
             }
-            let mut buf = vec![0u8; sample.size as usize];
-            file.seek(SeekFrom::Start(sample.file_offset))?;
-            file.read_exact(&mut buf)?;
+            let buf = read_region(&mut file, sample.file_offset, sample.size as u64)?;
 
             if let Some((text, settings, cue_id)) = decode_cue_sample(&buf) {
                 cues.push(Cue {
@@ -107,7 +100,7 @@ pub(super) fn extract_text(in_path: &Path, tracks_filter: &[u32], output: &Path)
     let mut out = String::from("WEBVTT\n\n");
     for cue in &cues {
         if let Some(cue_id) = &cue.cue_id {
-            let _ = writeln!(out, "{cue_id}");
+            let _ = writeln!(out, "{}", sanitize_single_line(cue_id));
         }
         let _ = write!(
             out,
@@ -116,15 +109,38 @@ pub(super) fn extract_text(in_path: &Path, tracks_filter: &[u32], output: &Path)
             format_timestamp(cue.end, spec.timescale)
         );
         if let Some(settings) = &cue.settings {
-            let _ = write!(out, " {settings}");
+            let _ = write!(out, " {}", sanitize_single_line(settings));
         }
         let _ = writeln!(out);
-        let _ = writeln!(out, "{}", cue.text);
+        let _ = writeln!(out, "{}", sanitize_cue_text(&cue.text));
         let _ = writeln!(out);
     }
 
     std::fs::write(output, out).map_err(CliError::Io)?;
     Ok(())
+}
+
+/// Collapse a field that must stay on one line (cue id / settings): any line break or
+/// `-->` would otherwise let the cue forge extra cues or timing lines.
+fn sanitize_single_line(s: &str) -> String {
+    sanitize_cue_text(s).replace('\n', " ")
+}
+
+/// Make cue payload text safe to embed in a WebVTT file: normalize line endings, drop
+/// blank lines (they terminate a cue) and neutralize `-->` (it starts a timing line).
+fn sanitize_cue_text(s: &str) -> String {
+    let normalized = s.replace("\r\n", "\n").replace('\r', "\n");
+    let mut out = String::with_capacity(normalized.len());
+    for line in normalized.split('\n') {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&line.replace("-->", "--&gt;"));
+    }
+    out
 }
 
 fn decode_cue_sample(buf: &[u8]) -> Option<(String, Option<String>, Option<String>)> {
@@ -190,6 +206,16 @@ mod tests {
         assert_eq!(text, "Second cue");
         assert_eq!(settings.as_deref(), Some("line:85% position:50% size:53% align:center"));
         assert_eq!(cue_id.as_deref(), Some("cue-42"));
+    }
+
+    #[test]
+    fn sanitize_cue_text_blocks_cue_forgery() {
+        let evil = "hi\n\n00:00:09.000 --> 00:00:10.000\nforged";
+        let clean = sanitize_cue_text(evil);
+        assert!(!clean.contains("\n\n"));
+        assert!(!clean.contains("-->"));
+        assert_eq!(sanitize_cue_text("a\r\n\r\nb"), "a\nb");
+        assert_eq!(sanitize_single_line("x\ny"), "x y");
     }
 
     #[test]

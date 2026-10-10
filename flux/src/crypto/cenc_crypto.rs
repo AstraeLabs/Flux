@@ -281,6 +281,11 @@ pub(crate) fn cens_sample(
     key: &[u8; KEY_LEN],
     data: &mut [u8],
 ) -> Result<()> {
+    if tenc.default_crypt_byte_block == 0 && tenc.default_skip_byte_block != 0 {
+        return Err(Error::InvalidInput(
+            "cens pattern crypt_byte_block=0 with nonzero skip leaves data unprotected",
+        ));
+    }
     if entry.initialization_vector.is_empty() {
         return Err(Error::InvalidInput(
             "cens (AES-CTR pattern) sample has no per-sample IV in senc — cens has no \
@@ -549,5 +554,13 @@ mod tests {
         let mut data = [0u8; 32];
         let mut scratch = CbcScratch::default();
         assert!(cbcs_sample(&t, &e, &key, &mut data, &mut scratch).is_err());
+    }
+
+    #[test]
+    fn cens_rejects_zero_crypt_with_nonzero_skip() {
+        let t = tenc(0, 9, None);
+        let e = entry(vec![0u8; 8], vec![]);
+        let mut data = [0u8; 64];
+        assert!(cens_sample(&t, &e, &[0u8; KEY_LEN], &mut data).is_err());
     }
 }

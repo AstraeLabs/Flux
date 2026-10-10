@@ -11,6 +11,7 @@ bytes      = { version = "1", default-features = false }
 aes        = { version = "0.8", default-features = false, optional = true }
 ctr        = { version = "0.9", default-features = false, optional = true }
 cbc        = { version = "0.1", default-features = false, optional = true }
+zeroize    = { version = "1", default-features = false, features = ["alloc"], optional = true }
 clap       = { version = "4.5", features = ["derive"], optional = true }
 serde_json = { version = "1.0", default-features = false, features = ["alloc"], optional = true }
 
@@ -26,7 +27,7 @@ required-features = ["cli"]
 default = ["std", "serde", "cenc"]
 std    = ["bitforge/std", "thiserror/std", "serde?/std"]
 serde  = ["dep:serde", "bitforge/serde"]
-cenc   = ["dep:aes", "dep:ctr", "dep:cbc"]
+cenc   = ["dep:aes", "dep:ctr", "dep:cbc", "dep:zeroize", "ctr/zeroize", "cbc/zeroize"]
 sample-aes = ["cenc", "cbc/alloc", "cbc/block-padding"]
 cli    = ["dep:clap", "std", "dep:flux-iocp", "dep:serde_json"]
 

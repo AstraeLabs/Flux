@@ -242,7 +242,7 @@ pub fn widevine_pssh_key_ids(data: &[u8]) -> Vec<[u8; 16]> {
             break;
         };
         pos += tag_len;
-        let field = (tag >> 3) as u8;
+        let field = tag >> 3;
         let wire_type = (tag & 0x7) as u8;
         match wire_type {
             PROTOBUF_WIRETYPE_VARINT => {
@@ -256,19 +256,26 @@ pub fn widevine_pssh_key_ids(data: &[u8]) -> Vec<[u8; 16]> {
                     break;
                 };
                 pos += n;
-                let len = len as usize;
-                if pos + len > data.len() {
+                let Ok(len) = usize::try_from(len) else {
+                    break;
+                };
+                if len > data.len() - pos {
                     break;
                 }
-                if field == WV_FIELD_KEY_ID && len == 16 {
+                if field == u64::from(WV_FIELD_KEY_ID) && len == 16 {
                     let mut kid = [0u8; 16];
                     kid.copy_from_slice(&data[pos..pos + len]);
                     kids.push(kid);
                 }
                 pos += len;
             }
-            5 => pos += 4,
-            1 => pos += 8,
+            5 | 1 => {
+                let skip = if wire_type == 5 { 4 } else { 8 };
+                if skip > data.len() - pos {
+                    break;
+                }
+                pos += skip;
+            }
             _ => break,
         }
     }
@@ -407,5 +414,16 @@ mod tests {
 
         let pro = playready_pro(&[kid], None);
         assert_eq!(playready_pssh_key_ids(&pro), alloc::vec![kid]);
+    }
+
+    #[test]
+    fn widevine_key_ids_huge_length_varint_terminates() {
+        let mut data = vec![0x12u8];
+        data.extend_from_slice(&[0xFF; 9]);
+        data.push(0x01);
+        assert!(widevine_pssh_key_ids(&data).is_empty());
+        for d in [&[0x12u8][..], &[0x12, 0x10, 1, 2][..], &[0x0d, 1][..], &[0x09, 1, 2][..]] {
+            assert!(widevine_pssh_key_ids(d).is_empty());
+        }
     }
 }

@@ -13,6 +13,7 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -21,13 +22,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install Rust (pinned by rust-toolchain.toml)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.95.0
 
       - name: Cache cargo registry & build artifacts
         uses: Swatinem/rust-cache@v2
 
       - name: Test flux (all features)
         shell: bash
-        run: cargo test -p flux --all-features --no-fail-fast
+        run: cargo test --locked --workspace --all-features --no-fail-fast

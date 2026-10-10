@@ -132,13 +132,16 @@ fn absorb_fragment(
             if builder.start_decode_time.is_none() {
                 builder.start_decode_time = Some(base);
             }
-            builder.next_dts = base as i64;
+            builder.next_dts = i64::try_from(base).unwrap_or(i64::MAX);
         }
-        let base_offset = tfhd.base_data_offset.unwrap_or(moof_off as u64) as i64;
+        let base_offset = i64::try_from(tfhd.base_data_offset.unwrap_or(moof_off as u64))
+            .map_err(|_| Error::InvalidInput("tfhd base_data_offset exceeds i64"))?;
         let mut run_end = base_offset;
         for trun in &traf.trun {
             let base = if trun.data_offset.is_some() {
-                base_offset + trun.data_offset.unwrap_or(0) as i64
+                base_offset
+                    .checked_add(i64::from(trun.data_offset.unwrap_or(0)))
+                    .ok_or(Error::InvalidInput("trun data offset overflows i64"))?
             } else {
                 run_end
             };
@@ -171,7 +174,9 @@ fn absorb_fragment(
 
                 let start = usize::try_from(cursor)
                     .map_err(|_| Error::InvalidInput("negative sample data offset"))?;
-                let end = start + size;
+                let end = start
+                    .checked_add(size)
+                    .ok_or(Error::InvalidInput("sample end offset overflows"))?;
                 if end > file.len() {
                     return Err(Error::BufferTooShort {
                         need: end,
@@ -180,7 +185,7 @@ fn absorb_fragment(
                     });
                 }
                 let dts = builder.next_dts;
-                let pts = dts + composition_offset;
+                let pts = dts.saturating_add(composition_offset);
                 builder.samples.push(Sample {
                     data: file[start..end].to_vec().into(),
                     dts: Some(dts),
@@ -189,8 +194,10 @@ fn absorb_fragment(
                     flags: crate::ir::SampleFlags::new(is_sync),
                     provenance: None,
                 });
-                builder.next_dts += duration as i64;
-                cursor += size as i64;
+                builder.next_dts = builder.next_dts.saturating_add(duration as i64);
+                cursor = cursor
+                    .checked_add(size as i64)
+                    .ok_or(Error::InvalidInput("sample cursor overflows i64"))?;
                 run_end = cursor;
             }
         }
@@ -206,9 +213,9 @@ pub(crate) fn find_top_box<'a>(data: &'a [u8], fourcc: &[u8; 4]) -> Option<&'a [
             let end = if bx.header.size == 0 {
                 data.len()
             } else {
-                offset + bx.header.size as usize
+                offset.checked_add(usize::try_from(bx.header.size).ok()?)?
             };
-            return Some(&data[offset..end]);
+            return data.get(offset..end);
         }
         if consumed == 0 {
             break;

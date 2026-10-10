@@ -48,7 +48,7 @@ pub fn decode_avc_sps(sps_bytes: &[u8]) -> Result<AvcSpsInfo> {
     let _sps_id = r.read_ue("seq_parameter_set_id")?;
 
     let chroma_format_idc = if is_high_profile(profile_idc) {
-        let chroma_format_idc = r.read_ue("chroma_format_idc")? as u8;
+        let chroma_format_idc = u8::try_from(r.read_ue("chroma_format_idc")?.min(255)).unwrap_or(255);
         if chroma_format_idc == 3 {
             let _ = r.read_flag("separate_colour_plane_flag")?;
         }
@@ -90,6 +90,13 @@ pub fn decode_avc_sps(sps_bytes: &[u8]) -> Result<AvcSpsInfo> {
         let _ = r.read_se("offset_for_non_ref_pic")?;
         let _ = r.read_se("offset_for_top_to_bottom_field")?;
         let num_ref_frames = r.read_ue("num_ref_frames_in_pic_order_cnt_cycle")?;
+        if num_ref_frames > 255 {
+            return Err(Error::BufferTooShort {
+                need: 255,
+                have: num_ref_frames.min(usize::MAX as u64) as usize,
+                what: "num_ref_frames_in_pic_order_cnt_cycle (max 255)",
+            });
+        }
         for _ in 0..num_ref_frames {
             let _ = r.read_se("offset_for_ref_frame[i]")?;
         }
@@ -117,19 +124,24 @@ pub fn decode_avc_sps(sps_bytes: &[u8]) -> Result<AvcSpsInfo> {
         (0, 0, 0, 0)
     };
 
-    let pic_width_in_mbs = pic_width_in_mbs_minus1 + 1;
-    let pic_height_in_map_units = pic_height_in_map_units_minus1 + 1;
-    let frame_height_in_mbs = (2 - frame_mbs_only as u64) * pic_height_in_map_units;
+    let pic_width_in_mbs = pic_width_in_mbs_minus1.saturating_add(1);
+    let pic_height_in_map_units = pic_height_in_map_units_minus1.saturating_add(1);
+    let frame_height_in_mbs = (2 - frame_mbs_only as u64).saturating_mul(pic_height_in_map_units);
 
     let crop_unit_x = avc_sub_width_c(chroma_format_idc) as u64;
-    let crop_unit_y = avc_sub_height_c(chroma_format_idc) as u64 * (2 - frame_mbs_only as u64);
+    let crop_unit_y =
+        (avc_sub_height_c(chroma_format_idc) as u64).saturating_mul(2 - frame_mbs_only as u64);
 
-    let width = (pic_width_in_mbs * 16).saturating_sub(crop_unit_x * (crop_left + crop_right));
-    let height = (frame_height_in_mbs * 16).saturating_sub(crop_unit_y * (crop_top + crop_bottom));
+    let width = pic_width_in_mbs
+        .saturating_mul(16)
+        .saturating_sub(crop_unit_x.saturating_mul(crop_left.saturating_add(crop_right)));
+    let height = frame_height_in_mbs
+        .saturating_mul(16)
+        .saturating_sub(crop_unit_y.saturating_mul(crop_top.saturating_add(crop_bottom)));
 
     Ok(AvcSpsInfo {
-        width: width as u32,
-        height: height as u32,
+        width: u32::try_from(width).unwrap_or(u32::MAX),
+        height: u32::try_from(height).unwrap_or(u32::MAX),
     })
 }
 
@@ -156,7 +168,7 @@ pub fn decode_hevc_sps(sps_bytes: &[u8]) -> Result<HevcSpsInfo> {
     hevc_skip_ptl(&mut r, true, sps_max_sub_layers_minus1)?;
 
     let _ = r.read_ue("sps_seq_parameter_set_id")?;
-    let chroma_format_idc = r.read_ue("chroma_format_idc")? as u8;
+    let chroma_format_idc = u8::try_from(r.read_ue("chroma_format_idc")?.min(255)).unwrap_or(255);
     if chroma_format_idc == 3 {
         let _ = r.read_flag("separate_colour_plane_flag")?;
     }
@@ -185,13 +197,13 @@ pub fn decode_hevc_sps(sps_bytes: &[u8]) -> Result<HevcSpsInfo> {
     };
 
     let width = pic_width_in_luma_samples
-        .saturating_sub((sub_width_c as u64) * (conf_win_left + conf_win_right));
+        .saturating_sub((sub_width_c as u64).saturating_mul(conf_win_left.saturating_add(conf_win_right)));
     let height = pic_height_in_luma_samples
-        .saturating_sub((sub_height_c as u64) * (conf_win_top + conf_win_bottom));
+        .saturating_sub((sub_height_c as u64).saturating_mul(conf_win_top.saturating_add(conf_win_bottom)));
 
     Ok(HevcSpsInfo {
-        width: width as u32,
-        height: height as u32,
+        width: u32::try_from(width).unwrap_or(u32::MAX),
+        height: u32::try_from(height).unwrap_or(u32::MAX),
     })
 }
 
@@ -288,8 +300,8 @@ pub fn decode_vvc_sps(sps_bytes: &[u8]) -> Result<VvcSpsInfo> {
         general_profile_idc,
         general_tier_flag,
         general_level_idc,
-        width: width as u32,
-        height: height as u32,
+        width: u32::try_from(width).unwrap_or(u32::MAX),
+        height: u32::try_from(height).unwrap_or(u32::MAX),
     })
 }
 
@@ -363,4 +375,37 @@ fn decode_vvc_ptl(r: &mut BitReader, max_sublayers_minus1: u8) -> Result<(u8, bo
     }
 
     Ok((general_profile_idc, general_tier_flag, general_level_idc))
+}
+
+#[cfg(test)]
+mod hardening_tests {
+    use super::*;
+
+    #[test]
+    fn truncated_and_empty_sps_error() {
+        assert!(decode_avc_sps(&[]).is_err());
+        assert!(decode_avc_sps(&[0x67]).is_err());
+        assert!(decode_avc_sps(&[0x67, 0x64, 0x00, 0x1F]).is_err());
+        assert!(decode_avc_sps(&[0x67, 0x42, 0x00, 0x1F, 0x00, 0x00, 0x00]).is_err());
+    }
+
+    #[test]
+    fn poc_type1_cycle_longer_than_255_is_rejected() {
+        // profile 66 (baseline), sps_id ue=0, log2_max_frame_num ue=0,
+        // poc_type ue=1 ('010'), delta_pic_order_always_zero ('0'), two se(0) ('1','1'),
+        // num_ref_frames_in_cycle = ue(1000) -> 9 leading zeros.
+        let mut bits = alloc::string::String::from("1101001");
+        bits.push_str("000000000"); // 9 zeros
+        bits.push('1');
+        bits.push_str(&alloc::format!("{:09b}", 1000 - 511));
+        while bits.len() % 8 != 0 {
+            bits.push('0');
+        }
+        let mut bytes = alloc::vec![0x67u8, 66, 0, 30];
+        for ch in bits.as_bytes().chunks(8) {
+            bytes.push(u8::from_str_radix(core::str::from_utf8(ch).unwrap(), 2).unwrap());
+        }
+        bytes.extend_from_slice(&[0xFF; 8]);
+        assert!(decode_avc_sps(&bytes).is_err());
+    }
 }

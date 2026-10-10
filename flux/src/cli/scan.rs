@@ -15,19 +15,31 @@ pub(super) struct ScanTrack {
     pub(super) clear_fragments: u64,
 }
 
+/// Upper bound on fragments considered per chunk file.
+const MAX_SCAN_MOOFS: usize = 1_000_000;
+
 pub(super) fn scan_chunk(path: &Path) -> CliResult<(Vec<ScanTrack>, Option<u64>)> {
     let data = std::fs::read(path).map_err(CliError::Io)?;
 
     let mut moofs: Vec<(u64, u64)> = Vec::new();
     let mut i = 0usize;
-    while let Some(j) = find_fourcc(&data[i..], b"moof").map(|k| i + k) {
+    while moofs.len() < MAX_SCAN_MOOFS {
+        let Some(j) = find_fourcc(&data[i..], b"moof").map(|k| i + k) else {
+            break;
+        };
         let start = j.saturating_sub(4);
+        let mut next = j + 4;
         if let Some((s, e)) = valid_moof(&data, start) {
-            if !moofs.iter().any(|&(ps, pe)| s >= ps && e <= pe) {
+            // Candidates arrive in increasing offset order, so only the most recent
+            // accepted moof can contain this one (keeps the scan linear).
+            let nested = moofs.last().is_some_and(|&(ps, pe)| s >= ps && e <= pe);
+            if !nested {
                 moofs.push((s, e));
+                // Skip the moof body: a "moof" fourcc inside it is never a new fragment.
+                next = next.max(e as usize);
             }
         }
-        i = j + 4;
+        i = next;
     }
     moofs.sort_unstable();
 

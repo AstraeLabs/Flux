@@ -401,14 +401,14 @@ impl ProtectionSystemSpecificHeaderBox {
                 bytes[offset + 3],
             ]) as usize;
             offset += 4;
-            let kid_needed = kid_count * 16;
-            if bytes.len() < offset + kid_needed {
-                return Err(Error::BufferTooShort {
-                    need: offset + kid_needed,
+            let kid_needed = kid_count
+                .checked_mul(16)
+                .filter(|n| *n <= bytes.len() - offset)
+                .ok_or(Error::BufferTooShort {
+                    need: usize::MAX,
                     have: bytes.len(),
                     what: "pssh KIDs",
-                });
-            }
+                })?;
             for i in 0..kid_count {
                 let mut kid = [0u8; 16];
                 kid.copy_from_slice(&bytes[offset + i * 16..offset + (i + 1) * 16]);
@@ -416,21 +416,24 @@ impl ProtectionSystemSpecificHeaderBox {
             }
             offset += kid_needed;
         }
-        let data_size = u32::from_be_bytes([
-            bytes[offset],
-            bytes[offset + 1],
-            bytes[offset + 2],
-            bytes[offset + 3],
-        ]) as usize;
+        let size_field = bytes.get(offset..offset + 4).ok_or(Error::BufferTooShort {
+            need: offset + 4,
+            have: bytes.len(),
+            what: "pssh DataSize",
+        })?;
+        let data_size =
+            u32::from_be_bytes([size_field[0], size_field[1], size_field[2], size_field[3]])
+                as usize;
         offset += 4;
-        if bytes.len() < offset + data_size {
-            return Err(Error::BufferTooShort {
-                need: offset + data_size,
+        let data = bytes
+            .get(offset..)
+            .and_then(|rest| rest.get(..data_size))
+            .ok_or(Error::BufferTooShort {
+                need: offset.saturating_add(data_size),
                 have: bytes.len(),
                 what: "pssh Data",
-            });
-        }
-        let data = bytes[offset..offset + data_size].to_vec();
+            })?
+            .to_vec();
         Ok(Self {
             version,
             system_id,
@@ -908,7 +911,11 @@ pub struct SchemeInformationBox {
 impl<'a> Parse<'a> for SchemeInformationBox {
     type Error = Error;
     fn parse(bytes: &'a [u8]) -> Result<Self> {
-        let body = &bytes[BOX_HDR..];
+        let body = bytes.get(BOX_HDR..).ok_or(Error::BufferTooShort {
+            need: BOX_HDR,
+            have: bytes.len(),
+            what: "schi header",
+        })?;
         let mut tenc = None;
         let mut extra_boxes = Vec::new();
         let mut off = 0usize;
@@ -981,15 +988,22 @@ pub struct ProtectionSchemeInfoBox {
 impl<'a> Parse<'a> for ProtectionSchemeInfoBox {
     type Error = Error;
     fn parse(bytes: &'a [u8]) -> Result<Self> {
-        let body = &bytes[BOX_HDR..];
+        let body = bytes.get(BOX_HDR..).unwrap_or(&[]);
         if body.len() < 8 + 4 {
             return Err(Error::BufferTooShort {
-                need: 8 + 4,
+                need: BOX_HDR + 8 + 4,
                 have: bytes.len(),
                 what: "sinf (frma)",
             });
         }
         let frma_sz = u32::from_be_bytes([body[0], body[1], body[2], body[3]]) as usize;
+        if frma_sz < 8 + 4 || frma_sz > body.len() {
+            return Err(Error::BufferTooShort {
+                need: frma_sz.max(8 + 4),
+                have: body.len(),
+                what: "sinf frma size",
+            });
+        }
         let original_format = OriginalFormatBox::parse(&body[0..frma_sz])?;
 
         let mut off = frma_sz;
@@ -1003,10 +1017,17 @@ impl<'a> Parse<'a> for ProtectionSchemeInfoBox {
             if sz < 8 {
                 break;
             }
-            let end = (off + sz).min(body.len());
+            let end = off.saturating_add(sz).min(body.len());
             let boxtype = [body[off + 4], body[off + 5], body[off + 6], body[off + 7]];
             match &boxtype {
                 b"schm" => {
+                    if end - off < BOX_HDR + FULL_HDR {
+                        return Err(Error::BufferTooShort {
+                            need: BOX_HDR + FULL_HDR,
+                            have: end - off,
+                            what: "schm header",
+                        });
+                    }
                     scheme_type = Some(SchemeTypeBox::parse_body(
                         &body[off + BOX_HDR + FULL_HDR..end],
                         body[off + BOX_HDR],
@@ -1028,7 +1049,7 @@ impl<'a> Parse<'a> for ProtectionSchemeInfoBox {
                     });
                 }
             }
-            off += sz;
+            off = off.saturating_add(sz);
         }
         Ok(Self {
             original_format,
@@ -1182,3 +1203,72 @@ mod senc_truncation_tests {
 }
 
 bitforge::impl_spec_display!(ConstantIvSenc);
+#[cfg(test)]
+mod hardening_tests {
+    use super::*;
+
+    fn bx(ty: &[u8; 4], body: &[u8]) -> Vec<u8> {
+        let mut b = ((body.len() + 8) as u32).to_be_bytes().to_vec();
+        b.extend_from_slice(ty);
+        b.extend_from_slice(body);
+        b
+    }
+
+    #[test]
+    fn sinf_malformed_inputs_error_instead_of_panicking() {
+        for n in 0..8 {
+            assert!(ProtectionSchemeInfoBox::parse(&vec![0u8; n]).is_err());
+        }
+        // frma size larger than body, and smaller than a box
+        for sz in [0u32, 4, 11, 13, 1000, u32::MAX] {
+            let mut body = sz.to_be_bytes().to_vec();
+            body.extend_from_slice(b"frma");
+            body.extend_from_slice(b"avc1");
+            let sinf = bx(b"sinf", &body);
+            assert!(ProtectionSchemeInfoBox::parse(&sinf).is_err(), "frma_sz={sz}");
+        }
+        // schm too short
+        let frma = bx(b"frma", b"avc1");
+        for schm_body_len in 0..12usize {
+            let mut body = frma.clone();
+            body.extend(bx(b"schm", &vec![0u8; schm_body_len]));
+            let _ = ProtectionSchemeInfoBox::parse(&bx(b"sinf", &body));
+        }
+        // huge schm size claim
+        let mut body = frma.clone();
+        body.extend_from_slice(&u32::MAX.to_be_bytes());
+        body.extend_from_slice(b"schm");
+        let _ = ProtectionSchemeInfoBox::parse(&bx(b"sinf", &body));
+        // truncation sweep over a valid sinf
+        let mut body = frma.clone();
+        let mut schm = vec![0u8; 4];
+        schm.extend_from_slice(b"cenc");
+        schm.extend_from_slice(&0x10000u32.to_be_bytes());
+        body.extend(bx(b"schm", &schm));
+        let sinf = bx(b"sinf", &body);
+        assert!(ProtectionSchemeInfoBox::parse(&sinf).is_ok());
+        for n in 0..sinf.len() {
+            let _ = ProtectionSchemeInfoBox::parse(&sinf[..n]);
+        }
+    }
+
+    #[test]
+    fn pssh_v1_truncated_after_kids_errors() {
+        let mut body = vec![0u8; 16];
+        body.extend_from_slice(&1u32.to_be_bytes());
+        body.extend_from_slice(&[0u8; 16]);
+        // no data_size field at all
+        assert!(ProtectionSystemSpecificHeaderBox::parse_body(&body, 1).is_err());
+        // partial data_size field
+        body.extend_from_slice(&[0, 0]);
+        assert!(ProtectionSystemSpecificHeaderBox::parse_body(&body, 1).is_err());
+        // data_size larger than remainder
+        body.extend_from_slice(&[0xFF, 0xFF]);
+        assert!(ProtectionSystemSpecificHeaderBox::parse_body(&body, 1).is_err());
+        // KID count that overflows
+        let mut body = vec![0u8; 16];
+        body.extend_from_slice(&u32::MAX.to_be_bytes());
+        body.extend_from_slice(&[0u8; 8]);
+        assert!(ProtectionSystemSpecificHeaderBox::parse_body(&body, 1).is_err());
+    }
+}

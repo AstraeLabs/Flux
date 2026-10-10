@@ -706,7 +706,7 @@ impl<'a> Parse<'a> for DataReferenceBox {
         let ver = bytes[8];
         let flags = u32::from_be_bytes([0, bytes[9], bytes[10], bytes[11]]);
         let count = u32::from_be_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize;
-        let mut entries = Vec::with_capacity(count);
+        let mut entries = Vec::with_capacity(super::bounded_capacity(count, 8, bytes.len().saturating_sub(16)));
         let mut off = 16usize;
         for _ in 0..count {
             if off + 8 > bytes.len() {
@@ -859,7 +859,7 @@ impl<'a> Parse<'a> for SampleToChunkBox {
         let ver = bytes[8];
         let flags = u32::from_be_bytes([0, bytes[9], bytes[10], bytes[11]]);
         let count = u32::from_be_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize;
-        let mut entries = Vec::with_capacity(count);
+        let mut entries = Vec::with_capacity(super::bounded_capacity(count, 12, bytes.len().saturating_sub(16)));
         let mut off = 16usize;
         for _ in 0..count {
             if off + 12 > bytes.len() {
@@ -953,7 +953,11 @@ impl<'a> Parse<'a> for SampleSizeBox {
         let flags = u32::from_be_bytes([0, bytes[9], bytes[10], bytes[11]]);
         let sample_size = u32::from_be_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]);
         let count = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]) as usize;
-        let mut entries = Vec::with_capacity(count);
+        let mut entries = Vec::with_capacity(if sample_size == 0 {
+            super::bounded_capacity(count, 4, bytes.len().saturating_sub(20))
+        } else {
+            0
+        });
         if sample_size == 0 {
             let mut off = 20usize;
             for _ in 0..count {
@@ -1044,7 +1048,7 @@ impl<'a> Parse<'a> for ChunkOffsetBox {
         let ver = bytes[8];
         let flags = u32::from_be_bytes([0, bytes[9], bytes[10], bytes[11]]);
         let count = u32::from_be_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize;
-        let mut entries = Vec::with_capacity(count);
+        let mut entries = Vec::with_capacity(super::bounded_capacity(count, 4, bytes.len().saturating_sub(16)));
         let mut off = 16usize;
         for _ in 0..count {
             if off + 4 > bytes.len() {
@@ -1120,7 +1124,7 @@ impl<'a> Parse<'a> for ChunkLargeOffsetBox {
         let ver = bytes[8];
         let flags = u32::from_be_bytes([0, bytes[9], bytes[10], bytes[11]]);
         let count = u32::from_be_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize;
-        let mut entries = Vec::with_capacity(count);
+        let mut entries = Vec::with_capacity(super::bounded_capacity(count, 8, bytes.len().saturating_sub(16)));
         let mut off = 16usize;
         for _ in 0..count {
             if off + 8 > bytes.len() {
@@ -1200,7 +1204,7 @@ impl<'a> Parse<'a> for SyncSampleBox {
         let ver = bytes[8];
         let flags = u32::from_be_bytes([0, bytes[9], bytes[10], bytes[11]]);
         let count = u32::from_be_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize;
-        let mut entries = Vec::with_capacity(count);
+        let mut entries = Vec::with_capacity(super::bounded_capacity(count, 4, bytes.len().saturating_sub(16)));
         let mut off = 16usize;
         for _ in 0..count {
             if off + 4 > bytes.len() {
@@ -1801,7 +1805,7 @@ impl<'a> Parse<'a> for SampleDescriptionBox {
         let ver = bytes[8];
         let flags = u32::from_be_bytes([0, bytes[9], bytes[10], bytes[11]]);
         let count = u32::from_be_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize;
-        let mut entries = Vec::with_capacity(count);
+        let mut entries = Vec::with_capacity(super::bounded_capacity(count, 8, bytes.len().saturating_sub(16)));
         let mut off = 16usize;
         for _ in 0..count {
             if off + 8 > bytes.len() {
@@ -3101,4 +3105,57 @@ pub fn protect_init_segment(
     out.extend_from_slice(&new_moov);
     out.extend_from_slice(suffix);
     Ok(out)
+}
+
+#[cfg(test)]
+mod hardening_tests {
+    use super::*;
+
+    /// Full box (header + version/flags + `count`) with `extra` trailing bytes.
+    fn table_box(ty: &[u8; 4], pre_count: &[u8], count: u32, extra: &[u8]) -> Vec<u8> {
+        let mut v = Vec::new();
+        let total = 8 + 4 + pre_count.len() + 4 + extra.len();
+        v.extend_from_slice(&(total as u32).to_be_bytes());
+        v.extend_from_slice(ty);
+        v.extend_from_slice(&[0; 4]);
+        v.extend_from_slice(pre_count);
+        v.extend_from_slice(&count.to_be_bytes());
+        v.extend_from_slice(extra);
+        v
+    }
+
+    #[test]
+    fn huge_entry_counts_do_not_allocate_or_panic() {
+        // Each must either error or yield a truncated table; the point is no huge allocation.
+        if let Ok(b) = SampleToChunkBox::parse(&table_box(b"stsc", &[], u32::MAX, &[0; 12])) {
+            assert!(b.entries.len() <= 1);
+        }
+        if let Ok(b) = SampleSizeBox::parse(&table_box(b"stsz", &[0; 4], u32::MAX, &[])) {
+            assert!(b.entries.is_empty());
+        }
+        if let Ok(b) = SampleSizeBox::parse(&table_box(b"stsz", &[0, 0, 0, 0], u32::MAX, &[0; 4])) {
+            assert!(b.entries.len() <= 1);
+        }
+        if let Ok(b) = ChunkOffsetBox::parse(&table_box(b"stco", &[], u32::MAX, &[0; 4])) {
+            assert!(b.entries.len() <= 1);
+        }
+        if let Ok(b) = ChunkLargeOffsetBox::parse(&table_box(b"co64", &[], u32::MAX, &[0; 8])) {
+            assert!(b.entries.len() <= 1);
+        }
+        if let Ok(b) = SyncSampleBox::parse(&table_box(b"stss", &[], u32::MAX, &[0; 4])) {
+            assert!(b.entries.len() <= 1);
+        }
+        if let Ok(b) = DataReferenceBox::parse(&table_box(b"dref", &[], u32::MAX, &[])) {
+            assert!(b.entries.is_empty());
+        }
+        if let Ok(b) = SampleDescriptionBox::parse(&table_box(b"stsd", &[], u32::MAX, &[])) {
+            assert!(b.entries.is_empty());
+        }
+    }
+
+    #[test]
+    fn truncated_tables_error_or_empty() {
+        assert!(ChunkOffsetBox::parse(&[0, 0, 0, 8, b's', b't', b'c', b'o']).is_err());
+        assert!(SampleSizeBox::parse(&[]).is_err());
+    }
 }
