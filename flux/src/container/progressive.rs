@@ -13,7 +13,7 @@ use crate::init_segment::{
 use crate::media::{Media, Track};
 use crate::pipeline::{CodecConfig, Sample, build_init_segment};
 use crate::segments::FileTypeBox;
-use crate::timing::{CompositionOffsetBox, CttsEntry, SttsEntry, TimeToSampleBox};
+use crate::timing::{CompositionOffsetBox, CttsEntry, EditListBox, SttsEntry, TimeToSampleBox};
 
 const DEFAULT_MOVIE_TIMESCALE: u32 = 1000;
 const FTYP_MAJOR_BRAND: [u8; 4] = *b"isom";
@@ -54,7 +54,12 @@ impl SampleMeta {
 
 const SAFE_MAX_TRACK_TICKS: u64 = 1 << 31;
 
-pub(crate) fn rescale_track_timing_if_needed(timescale: u32, metas: &mut [SampleMeta]) -> u32 {
+/// `preferred_timescale` (0 = none): an audio track keeps its sample rate as media timescale when that still fits the 32-bit tick budget
+pub(crate) fn rescale_track_timing_if_needed(
+    timescale: u32,
+    preferred_timescale: u32,
+    metas: &mut [SampleMeta],
+) -> u32 {
     if timescale == 0 || metas.is_empty() {
         return timescale;
     }
@@ -65,6 +70,12 @@ pub(crate) fn rescale_track_timing_if_needed(timescale: u32, metas: &mut [Sample
 
     let new_timescale = ((SAFE_MAX_TRACK_TICKS * u64::from(timescale)) / total_ticks)
         .clamp(1000, u64::from(timescale)) as u32;
+    // ffmpeg's mov demuxer reads an audio edit list's media_time as a sample count, so it is only right when the media timescale equals the sample rate
+    let new_timescale = if preferred_timescale >= 1000 && preferred_timescale <= new_timescale {
+        preferred_timescale
+    } else {
+        new_timescale
+    };
 
     let rescale = |ticks: u64| -> u64 {
         ((ticks as u128 * u128::from(new_timescale) + u128::from(timescale) / 2)
@@ -89,12 +100,16 @@ pub(crate) fn rescale_track_timing_if_needed(timescale: u32, metas: &mut [Sample
     new_timescale
 }
 
-pub(crate) fn rescale_track_samples_if_needed(timescale: u32, samples: &mut [Sample]) -> u32 {
+pub(crate) fn rescale_track_samples_if_needed(
+    timescale: u32,
+    preferred_timescale: u32,
+    samples: &mut [Sample],
+) -> u32 {
     if samples.is_empty() {
         return timescale;
     }
     let mut metas: Vec<SampleMeta> = samples.iter().map(SampleMeta::from_sample).collect();
-    let new_timescale = rescale_track_timing_if_needed(timescale, &mut metas);
+    let new_timescale = rescale_track_timing_if_needed(timescale, preferred_timescale, &mut metas);
     if new_timescale == timescale {
         return timescale;
     }
@@ -107,6 +122,29 @@ pub(crate) fn rescale_track_samples_if_needed(timescale: u32, samples: &mut [Sam
         cumulative_dts += i64::from(dur);
     }
     new_timescale
+}
+
+/// Re-express an edit list's `media_time` values after the track's media timescale changed from `old_timescale` to `new_timescale`
+pub(crate) fn rescale_edit_list_media_time(
+    edit_list: &mut Option<EditListBox>,
+    old_timescale: u32,
+    new_timescale: u32,
+) {
+    if old_timescale == 0 || old_timescale == new_timescale {
+        return;
+    }
+    let Some(elst) = edit_list.as_mut() else {
+        return;
+    };
+    for entry in &mut elst.entries {
+        // A negative media_time (-1) marks an empty edit (a pure delay): it carries no media position to rescale.
+        if entry.media_time < 0 {
+            continue;
+        }
+        entry.media_time = ((entry.media_time as u128 * u128::from(new_timescale)
+            + u128::from(old_timescale) / 2)
+            / u128::from(old_timescale)) as i64;
+    }
 }
 
 fn codec_compatible_brand(config: &CodecConfig) -> Option<[u8; 4]> {
@@ -750,4 +788,174 @@ fn find_top_box<'a>(data: &'a [u8], fourcc: &[u8; 4]) -> Option<&'a [u8]> {
         offset += consumed;
     }
     None
+}
+
+#[cfg(test)]
+mod edit_list_rescale_tests {
+    use super::*;
+    use crate::timing::EditListEntry;
+
+    fn elst(entries: &[(u64, i64)]) -> Option<EditListBox> {
+        Some(EditListBox {
+            version: 0,
+            flags: 0,
+            entries: entries
+                .iter()
+                .map(|&(segment_duration, media_time)| EditListEntry {
+                    segment_duration,
+                    media_time,
+                    media_rate_integer: 1,
+                    media_rate_fraction: 0,
+                })
+                .collect(),
+        })
+    }
+
+    fn media_times(e: &Option<EditListBox>) -> Vec<i64> {
+        e.as_ref().unwrap().entries.iter().map(|x| x.media_time).collect()
+    }
+
+    #[test]
+    fn media_time_follows_a_timescale_change() {
+        // Real-world case: 10 MHz track rescaled to 414156 / 414170 (Rakuten audio/video).
+        let mut audio = elst(&[(5_185_152, 426_667)]);
+        rescale_edit_list_media_time(&mut audio, 10_000_000, 414_156);
+        assert_eq!(media_times(&audio), vec![17_671]);
+
+        let mut video = elst(&[(5_185_770, 834_168)]);
+        rescale_edit_list_media_time(&mut video, 10_000_000, 414_170);
+        assert_eq!(media_times(&video), vec![34_549]);
+    }
+
+    #[test]
+    fn segment_duration_and_rate_are_untouched() {
+        let mut e = elst(&[(1234, 1_000_000)]);
+        rescale_edit_list_media_time(&mut e, 10_000_000, 1_000_000);
+        let entry = e.unwrap().entries[0];
+        assert_eq!(entry.media_time, 100_000);
+        assert_eq!(entry.segment_duration, 1234);
+        assert_eq!((entry.media_rate_integer, entry.media_rate_fraction), (1, 0));
+    }
+
+    #[test]
+    fn empty_edit_marker_is_preserved() {
+        let mut e = elst(&[(500, -1), (900, 2_000_000)]);
+        rescale_edit_list_media_time(&mut e, 10_000_000, 1_000_000);
+        assert_eq!(media_times(&e), vec![-1, 200_000]);
+    }
+
+    #[test]
+    fn zero_media_time_stays_zero() {
+        let mut e = elst(&[(900, 0)]);
+        rescale_edit_list_media_time(&mut e, 10_000_000, 414_156);
+        assert_eq!(media_times(&e), vec![0]);
+    }
+
+    #[test]
+    fn unchanged_or_invalid_timescale_is_a_noop() {
+        let mut same = elst(&[(900, 12_345)]);
+        rescale_edit_list_media_time(&mut same, 48_000, 48_000);
+        assert_eq!(media_times(&same), vec![12_345]);
+
+        let mut zero_old = elst(&[(900, 12_345)]);
+        rescale_edit_list_media_time(&mut zero_old, 0, 48_000);
+        assert_eq!(media_times(&zero_old), vec![12_345]);
+    }
+
+    #[test]
+    fn missing_edit_list_is_a_noop() {
+        let mut none: Option<EditListBox> = None;
+        rescale_edit_list_media_time(&mut none, 10_000_000, 414_156);
+        assert!(none.is_none());
+    }
+
+    #[test]
+    fn rounds_to_nearest_tick() {
+        // 3 * 1/3 = 1 ; 2 * 1/3 = 0.67 -> 1 ; 1 * 1/3 = 0.33 -> 0
+        let mut e = elst(&[(1, 3), (1, 2), (1, 1)]);
+        rescale_edit_list_media_time(&mut e, 3, 1);
+        assert_eq!(media_times(&e), vec![1, 1, 0]);
+    }
+    fn metas(count: usize, duration: u32) -> Vec<SampleMeta> {
+        (0..count)
+            .map(|_| SampleMeta { duration: Some(duration), composition_offset: 0, size: 1, is_sync: true })
+            .collect()
+    }
+
+    // 243_056 AAC frames of 1024 ticks at 10 MHz units (scaled): total ticks > 2^31 -> rescale needed.
+    fn long_audio_metas() -> Vec<SampleMeta> {
+        metas(243_056, 213_333)
+    }
+
+    #[test]
+    fn timescale_untouched_when_ticks_fit() {
+        let mut m = metas(100, 1024);
+        assert_eq!(rescale_track_timing_if_needed(48_000, 48_000, &mut m), 48_000);
+        assert_eq!(m[0].duration, Some(1024));
+    }
+
+    #[test]
+    fn audio_prefers_its_sample_rate_when_it_fits() {
+        let mut m = long_audio_metas();
+        let total: u64 = m.iter().map(|x| u64::from(x.duration.unwrap())).sum();
+        assert!(total > (1u64 << 31));
+        let new_ts = rescale_track_timing_if_needed(10_000_000, 48_000, &mut m);
+        assert_eq!(new_ts, 48_000);
+        let rescaled: u64 = m.iter().map(|x| u64::from(x.duration.unwrap())).sum();
+        assert!(rescaled <= (1u64 << 31));
+        // 5_185.152 s of audio at 48 kHz
+        assert!((rescaled as i64 - 248_887_296).abs() < 48_000);
+    }
+
+    #[test]
+    fn without_a_preferred_timescale_the_legacy_choice_is_kept() {
+        let mut m = long_audio_metas();
+        let new_ts = rescale_track_timing_if_needed(10_000_000, 0, &mut m);
+        assert_ne!(new_ts, 48_000);
+        assert!(new_ts < 10_000_000 && new_ts >= 1000);
+    }
+
+    #[test]
+    fn preferred_timescale_too_large_for_the_budget_is_ignored() {
+        let mut m = long_audio_metas();
+        let new_ts = rescale_track_timing_if_needed(10_000_000, 9_000_000, &mut m);
+        assert!(new_ts < 9_000_000);
+    }
+
+    #[test]
+    fn sample_rate_audio_edit_list_ends_up_as_the_aac_priming() {
+        // Rakuten audio: 10 MHz -> 48 kHz turns media_time 426667 into the 2048-sample AAC priming.
+        let mut e = elst(&[(5_185_152, 426_667)]);
+        rescale_edit_list_media_time(&mut e, 10_000_000, 48_000);
+        assert_eq!(media_times(&e), vec![2048]);
+    }
+    #[test]
+    fn version_1_edit_list_survives_rescale_and_roundtrips() {
+        use bitforge::{Parse, Serialize};
+        let mut e = Some(EditListBox {
+            version: 1,
+            flags: 0,
+            entries: vec![EditListEntry {
+                segment_duration: 6_000_000_000,
+                media_time: 5_000_000_000,
+                media_rate_integer: 1,
+                media_rate_fraction: 0,
+            }],
+        });
+        rescale_edit_list_media_time(&mut e, 10_000_000, 48_000);
+        let elst = e.unwrap();
+        assert_eq!(elst.entries[0].media_time, 24_000_000);
+        assert_eq!(elst.entries[0].segment_duration, 6_000_000_000);
+        let mut bytes = vec![0u8; elst.serialized_len()];
+        elst.serialize_into(&mut bytes).unwrap();
+        let parsed = EditListBox::parse(&bytes).unwrap();
+        assert_eq!(parsed.entries, elst.entries);
+    }
+
+    #[test]
+    fn empty_edit_followed_by_a_real_edit_is_scaled_independently() {
+        let mut e = elst(&[(1000, -1), (9000, 426_667), (500, 0)]);
+        rescale_edit_list_media_time(&mut e, 10_000_000, 48_000);
+        assert_eq!(media_times(&e), vec![-1, 2048, 0]);
+    }
 }

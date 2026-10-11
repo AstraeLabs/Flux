@@ -163,3 +163,20 @@ impl CodecConfig {
         !self.is_subtitle()
     }
 }
+
+impl CodecConfig {
+    pub(crate) fn audio_sample_rate(&self) -> Option<u32> {
+        match self {
+            CodecConfig::Aac { sample_rate, .. }
+            | CodecConfig::Ac3 { sample_rate, .. }
+            | CodecConfig::Eac3 { sample_rate, .. }
+            | CodecConfig::Opus { sample_rate, .. }
+            | CodecConfig::Flac { sample_rate, .. }
+            | CodecConfig::Ac4 { sample_rate, .. }
+            | CodecConfig::MpegH { sample_rate, .. }
+            | CodecConfig::MpegAudio { sample_rate, .. }
+            | CodecConfig::Dts { sample_rate, .. } => Some(*sample_rate).filter(|r| *r != 0),
+            _ => None,
+        }
+    }
+}

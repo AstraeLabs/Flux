@@ -40,6 +40,46 @@ struct PsshJson {
 }
 
 #[derive(Serialize)]
+struct EditEntryReport {
+    segment_duration: u64,
+    media_time: i64,
+    media_time_seconds: Option<f64>,
+    media_rate: f64,
+}
+
+fn edit_entries_report(
+    edit_list: Option<&crate::timing::EditListBox>,
+    media_timescale: u32,
+) -> Vec<EditEntryReport> {
+    let Some(elst) = edit_list else {
+        return Vec::new();
+    };
+    elst.entries
+        .iter()
+        .map(|e| EditEntryReport {
+            segment_duration: e.segment_duration,
+            media_time: e.media_time,
+            media_time_seconds: (e.media_time >= 0 && media_timescale != 0)
+                .then(|| e.media_time as f64 / media_timescale as f64),
+            media_rate: f64::from(e.media_rate_integer) + f64::from(e.media_rate_fraction) / 65536.0,
+        })
+        .collect()
+}
+
+/// ffmpeg's mov demuxer reads an audio edit list's `media_time` as a number of samples, so it only lines up when the media timescale equals the sample rate
+fn audio_edit_list_timescale_mismatch(
+    config: &CodecConfig,
+    media_timescale: u32,
+    edit_list: Option<&crate::timing::EditListBox>,
+) -> bool {
+    let Some(rate) = config.audio_sample_rate() else {
+        return false;
+    };
+    rate != media_timescale
+        && edit_list.is_some_and(|e| e.entries.iter().any(|x| x.media_time > 0))
+}
+
+#[derive(Serialize)]
 struct StreamReport {
     index: usize,
     stream_type: String,
@@ -64,11 +104,16 @@ struct StreamReport {
     trick_play_factor: Option<u8>,
     language: String,
     crypto: Option<CryptoReport>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    edit_list: Vec<EditEntryReport>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    edit_list_timescale_mismatch: bool,
 }
 
 #[derive(Serialize)]
 struct DumpReport {
     stream_count: usize,
+    movie_timescale: u32,
     fragments: Option<usize>,
     pssh_systems: Vec<String>,
     pssh: Vec<PsshJson>,
@@ -107,7 +152,7 @@ pub(super) fn dump_streams(
     file.seek(SeekFrom::Start(moov_box.offset))?;
     file.read_exact(&mut moov_bytes)?;
 
-    let (_movie_timescale, specs) = cenc_decrypt::harvest_moov_track_specs(&moov_bytes)?;
+    let (movie_timescale, specs) = cenc_decrypt::harvest_moov_track_specs(&moov_bytes)?;
     let crypto_tracks = cenc_decrypt::harvest_moov_crypto(&moov_bytes)?;
     let extras = cenc_decrypt::harvest_moov_dump_extras(&moov_bytes)?;
     let trex_defaults = cenc_decrypt::harvest_trex_defaults(&moov_bytes);
@@ -265,6 +310,12 @@ pub(super) fn dump_streams(
                 .map(|e| String::from_utf8_lossy(&e.language).into_owned())
                 .unwrap_or_else(|| "und".to_string()),
             crypto: None,
+            edit_list: edit_entries_report(spec.edit_list.as_ref(), spec.timescale),
+            edit_list_timescale_mismatch: audio_edit_list_timescale_mismatch(
+                &spec.codec_config,
+                spec.timescale,
+                spec.edit_list.as_ref(),
+            ),
         };
 
         match &spec.codec_config {
@@ -386,6 +437,7 @@ pub(super) fn dump_streams(
 
     let report = DumpReport {
         stream_count: specs.len(),
+        movie_timescale,
         fragments: if fragment_count > 0 {
             Some(fragment_count)
         } else {
@@ -450,6 +502,8 @@ fn dump_webm(in_path: &Path, tracks_filter: &[u32], json: bool) -> CliResult<()>
                 .clone()
                 .unwrap_or_else(|| "und".to_string()),
             crypto: None,
+            edit_list: Vec::new(),
+            edit_list_timescale_mismatch: false,
         };
         if is_enc {
             s.crypto = Some(CryptoReport {
@@ -467,6 +521,7 @@ fn dump_webm(in_path: &Path, tracks_filter: &[u32], json: bool) -> CliResult<()>
 
     let report = DumpReport {
         stream_count: streams.len(),
+        movie_timescale: 0,
         fragments: None,
         pssh_systems: Vec::new(),
         pssh: Vec::new(),
@@ -500,6 +555,9 @@ fn render_json(_report: &DumpReport) -> CliResult<()> {
 
 fn render_human(report: &DumpReport) {
     println!("Found {} stream(s).", report.stream_count);
+    if report.movie_timescale != 0 {
+        println!("Movie timescale: {}", report.movie_timescale);
+    }
     if let Some(fragments) = report.fragments {
         println!("Fragments: {fragments}");
     }
@@ -557,6 +615,27 @@ fn render_human(report: &DumpReport) {
             println!(" trick_play_factor: 0");
         }
         println!(" language: {}", s.language);
+        if !s.edit_list.is_empty() {
+            println!(" edit_list: {} entr{}", s.edit_list.len(), if s.edit_list.len() == 1 { "y" } else { "ies" });
+            for (i, e) in s.edit_list.iter().enumerate() {
+                match e.media_time_seconds {
+                    Some(sec) => println!(
+                        "   [{i}] segment_duration: {} media_time: {} ({sec:.3} s) media_rate: {}",
+                        e.segment_duration, e.media_time, e.media_rate
+                    ),
+                    None => println!(
+                        "   [{i}] segment_duration: {} media_time: {} (empty edit) media_rate: {}",
+                        e.segment_duration, e.media_time, e.media_rate
+                    ),
+                }
+            }
+        }
+        if s.edit_list_timescale_mismatch {
+            println!(
+                " warning: audio time_scale {} differs from the sampling rate; ffmpeg reads the edit list media_time as a sample count, so the audio may play out of sync",
+                s.time_scale
+            );
+        }
 
         if let Some(c) = &s.crypto {
             println!(" default_kid: {}", c.default_kid);

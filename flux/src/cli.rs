@@ -1019,6 +1019,7 @@ fn run_impl(args: &Args, output: Option<&Path>) -> CliResult<(Container, OutputF
         for track in &mut media.tracks {
             let new_timescale = crate::progressive::rescale_track_samples_if_needed(
                 track.spec.timescale,
+                track.spec.config.audio_sample_rate().unwrap_or(0),
                 &mut track.samples,
             );
             if __profile && new_timescale != track.spec.timescale {
@@ -1029,6 +1030,11 @@ fn run_impl(args: &Args, output: Option<&Path>) -> CliResult<(Container, OutputF
                     track.spec.track_id, track.spec.timescale, new_timescale
                 );
             }
+            crate::progressive::rescale_edit_list_media_time(
+                &mut track.spec.edit_list,
+                track.spec.timescale,
+                new_timescale,
+            );
             track.spec.timescale = new_timescale;
         }
         if !opts.tracks.is_empty() {
@@ -1836,6 +1842,7 @@ fn stream_decrypt_to_progressive_mp4(
     for (track_idx, track) in tracks.iter_mut().enumerate() {
         let new_timescale = crate::progressive::rescale_track_timing_if_needed(
             track.spec.timescale,
+            track.spec.config.audio_sample_rate().unwrap_or(0),
             &mut track_samples_meta[track_idx],
         );
         if __profile && new_timescale != track.spec.timescale {
@@ -1846,6 +1853,11 @@ fn stream_decrypt_to_progressive_mp4(
                 track.spec.track_id, track.spec.timescale, new_timescale
             );
         }
+        crate::progressive::rescale_edit_list_media_time(
+            &mut track.spec.edit_list,
+            track.spec.timescale,
+            new_timescale,
+        );
         track.spec.timescale = new_timescale;
     }
 
@@ -2305,6 +2317,7 @@ fn stream_decrypt_progressive_to_progressive_mp4(
     for (track_idx, track) in tracks.iter_mut().enumerate() {
         let new_timescale = crate::progressive::rescale_track_timing_if_needed(
             track.spec.timescale,
+            track.spec.config.audio_sample_rate().unwrap_or(0),
             &mut track_samples_meta[track_idx],
         );
         if __profile && new_timescale != track.spec.timescale {
@@ -2315,6 +2328,11 @@ fn stream_decrypt_progressive_to_progressive_mp4(
                 track.spec.track_id, track.spec.timescale, new_timescale
             );
         }
+        crate::progressive::rescale_edit_list_media_time(
+            &mut track.spec.edit_list,
+            track.spec.timescale,
+            new_timescale,
+        );
         track.spec.timescale = new_timescale;
     }
     let header =
