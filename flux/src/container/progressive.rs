@@ -755,11 +755,24 @@ fn set_track_durations(
             }
             if let Some(elst) = trak.edts.as_mut().and_then(|e| e.elst.as_mut()) {
                 for entry in &mut elst.entries {
-                    if entry.segment_duration != 0 {
+                    let playable = media_duration.saturating_sub(entry.media_time.max(0) as u64);
+                    let full = (playable * movie_timescale as u64).div_ceil(ts);
+                    
+                    // Some packagers write segment_duration in milliseconds against a different movie timescale (e.g. 10 MHz), so the
+                    // edit covers only a sliver of the track and players trim the stream to ~0s: restore the full length.
+                    let in_ms = playable * 1000 / ts;
+                    let bogus = movie_timescale != 1000
+                        && entry.media_time >= 0
+                        && entry.segment_duration != 0
+                        && entry.segment_duration.abs_diff(in_ms) <= in_ms / 100 + 1;
+                    if entry.segment_duration != 0 && !bogus {
                         continue;
                     }
                     let numerator = media_duration * movie_timescale as u64;
-                    entry.segment_duration = numerator.div_ceil(ts);
+                    entry.segment_duration = if bogus { full } else { numerator.div_ceil(ts) };
+                    if entry.segment_duration > u32::MAX as u64 {
+                        elst.version = 1;
+                    }
                 }
             }
         }

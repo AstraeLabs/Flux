@@ -9,7 +9,7 @@ use crate::box_types::{BOX_HEADER_MIN_SIZE, parse_box};
 pub use crate::cenc::CencScheme;
 use crate::cenc::{ProtectionSystemSpecificHeaderBox, SampleEncryptionEntry, TrackEncryptionBox};
 use crate::cenc_crypto;
-use crate::drm::{WIDEVINE_SYSTEM_ID, widevine_pssh_key_ids};
+use crate::drm::{PLAYREADY_SYSTEM_ID, WIDEVINE_SYSTEM_ID, playready_pssh_key_ids, widevine_pssh_key_ids};
 use crate::error::{Error, Result};
 use crate::media::Media;
 use crate::movie_fragment::{
@@ -283,19 +283,34 @@ fn resolve_zero_kid_from_widevine_pssh(moov: &[u8]) -> Option<[u8; 16]> {
         let Ok(parsed) = ProtectionSystemSpecificHeaderBox::parse_box(pssh) else {
             continue;
         };
-        if parsed.system_id != WIDEVINE_SYSTEM_ID {
-            continue;
-        }
-        if !parsed.kids.is_empty() {
-            for kid in parsed.kids {
-                if !found.contains(&kid) {
-                    found.push(kid);
+        if parsed.system_id == WIDEVINE_SYSTEM_ID {
+            if !parsed.kids.is_empty() {
+                for kid in parsed.kids {
+                    if !found.contains(&kid) {
+                        found.push(kid);
+                    }
+                }
+            } else if !parsed.data.is_empty() {
+                let kids = widevine_pssh_key_ids(&parsed.data);
+                for kid in kids {
+                    if !found.contains(&kid) {
+                        found.push(kid);
+                    }
                 }
             }
-        } else {
-            for kid in widevine_pssh_key_ids(&parsed.data) {
-                if !found.contains(&kid) {
-                    found.push(kid);
+        } else if parsed.system_id == PLAYREADY_SYSTEM_ID {
+            if !parsed.kids.is_empty() {
+                for kid in parsed.kids {
+                    if !found.contains(&kid) {
+                        found.push(kid);
+                    }
+                }
+            } else if !parsed.data.is_empty() {
+                let kids = playready_pssh_key_ids(&parsed.data);
+                for kid in kids {
+                    if !found.contains(&kid) {
+                        found.push(kid);
+                    }
                 }
             }
         }
