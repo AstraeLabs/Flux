@@ -103,7 +103,7 @@ fn unmuxable_track_error(t: &TrackSpec) -> crate::error::Error {
             track_id: t.track_id,
             format: *format,
         },
-        _ => unreachable!("is_muxable_in_bmff() is only false for Subtitle"),
+        _ => crate::error::Error::InvalidInput("track is not muxable in BMFF"),
     }
 }
 
@@ -279,6 +279,37 @@ fn build_trak(t: &TrackSpec) -> Result<TrackBox> {
             )
         }
         CodecConfig::Eac3 {
+            config,
+            channel_count,
+            sample_rate,
+            sample_size,
+        } => {
+            let mut dec3_full = vec![0u8; config.serialized_len() + 8];
+            dec3_full[4..8].copy_from_slice(b"dec3");
+            let n = config.serialize_into(&mut dec3_full[8..])?;
+            let dec3_opaque = OpaqueBox::new(*b"dec3", dec3_full[8..8 + n].to_vec());
+            let entry = SampleEntryVariant::Ec3(Box::new(Ec3SampleEntry {
+                data_reference_index: 1,
+                channelcount: *channel_count,
+                samplesize: *sample_size,
+                samplerate: (*sample_rate) << 16,
+                config_boxes: vec![dec3_opaque],
+            }));
+            (
+                entry,
+                None,
+                Some(SoundMediaHeaderBox {
+                    version: 0,
+                    flags: 0,
+                    balance: 0,
+                }),
+                *b"soun",
+                b"SoundHandler\0".to_vec(),
+                0,
+                0,
+            )
+        }
+        CodecConfig::Eac3Joc {
             config,
             channel_count,
             sample_rate,
@@ -562,6 +593,58 @@ fn build_trak(t: &TrackSpec) -> Result<TrackBox> {
                 samplerate: (*sample_rate) << 16,
                 config_boxes: vec![ddts_opaque],
             }));
+            (
+                entry,
+                None,
+                Some(SoundMediaHeaderBox {
+                    version: 0,
+                    flags: 0,
+                    balance: 0,
+                }),
+                *b"soun",
+                b"SoundHandler\0".to_vec(),
+                0,
+                0,
+            )
+        }
+        CodecConfig::DtsX {
+            config,
+            codec_fourcc,
+            channel_count,
+            sample_rate,
+            sample_size,
+        } => {
+            let ddts_opaque = config_box(&DDTS_FOURCC, config)?;
+            let entry = SampleEntryVariant::Dts(Box::new(DtsSampleEntry {
+                codec_type: *codec_fourcc,
+                data_reference_index: 1,
+                channelcount: *channel_count,
+                samplesize: *sample_size,
+                samplerate: (*sample_rate) << 16,
+                config_boxes: vec![ddts_opaque],
+            }));
+            (
+                entry,
+                None,
+                Some(SoundMediaHeaderBox {
+                    version: 0,
+                    flags: 0,
+                    balance: 0,
+                }),
+                *b"soun",
+                b"SoundHandler\0".to_vec(),
+                0,
+                0,
+            )
+        }
+        CodecConfig::TrueHd {
+            config,
+            channel_count: _,
+            sample_rate: _,
+            sample_size: _,
+        } => {
+            let mlpa_opaque = config_box(b"mlpa", config)?;
+            let entry = SampleEntryVariant::Unknown(mlpa_opaque);
             (
                 entry,
                 None,

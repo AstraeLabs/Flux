@@ -22,7 +22,7 @@ fn ffmpeg_stream_md5(path: &Path, map: &str) -> Option<String> {
     let output = Command::new("ffmpeg")
         .args(["-v", "error", "-i"])
         .arg(path)
-        .args(["-map", map, "-f", "md5", "-"])
+        .args(["-map", map, "-c:a", "copy", "-f", "md5", "-"])
         .output()
         .ok()?;
     if !output.status.success() {
@@ -35,7 +35,7 @@ fn ffmpeg_stream_md5(path: &Path, map: &str) -> Option<String> {
 #[test]
 fn ts_sample_aes_decrypt_matches_the_independently_encrypted_source_checksums() {
     const EXPECTED_VIDEO_MD5: &str = "fcd4992d4964dec2c36dbafc663176cb";
-    const EXPECTED_AUDIO_MD5: &str = "59babbc7d973b888c1775f141aa655b2";
+    const EXPECTED_AUDIO_MD5: &str = "d1e8bccfaa3dfe2fe5e828add835c645";
 
     let out = unique_temp_path("ts-sample-aes-out.ts");
     let args = Args {
@@ -58,6 +58,9 @@ fn ts_sample_aes_decrypt_matches_the_independently_encrypted_source_checksums() 
         parallel_decrypt_min_kb: None,
         io_depth: None,
         no_profile: false,
+        chunks: None,
+        in_place: false,
+        tfdt_rebase: false,
         daemon: false,
         #[cfg(feature = "sample-aes")]
         aes128: false,

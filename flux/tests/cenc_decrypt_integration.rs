@@ -31,6 +31,9 @@ fn base_args(input: PathBuf, output: PathBuf, keys: Vec<&str>) -> Args {
         parallel_decrypt_min_kb: None,
         io_depth: None,
         no_profile: false,
+        chunks: None,
+        in_place: false,
+        tfdt_rebase: false,
         daemon: false,
         #[cfg(feature = "sample-aes")]
         aes128: false,
@@ -67,9 +70,11 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 
+
+const EXPECTED_AUDIO_PACKETS_MD5: &str = "283ab05f361c3ed6ea5f2ec55b2247f4";
+
 #[test]
-fn cenc_audio_decrypts_and_matches_independently_decrypted_pcm() {
-    const EXPECTED_PCM_MD5: &str = "1b7117f565f59cabebfe43a9c020db40";
+fn cenc_audio_decrypts_and_matches_independently_decrypted_packets() {
     let out = unique_temp_path("cenc-audio-out.mp4");
     let args = base_args(
         fixture("cenc_audio.mp4"),
@@ -79,15 +84,14 @@ fn cenc_audio_decrypts_and_matches_independently_decrypted_pcm() {
     cli::run(args).expect("cenc decrypt must succeed");
     assert!(std::fs::metadata(&out).unwrap().len() > 0);
 
-    if let Some(got) = ffmpeg_md5(&out, &["-f", "s16le"]) {
-        assert_eq!(got, EXPECTED_PCM_MD5, "decrypted cenc audio PCM must match the independent reference decrypt");
+    if let Some(got) = ffmpeg_md5(&out, &["-map", "0:a:0", "-c", "copy"]) {
+        assert_eq!(got, EXPECTED_AUDIO_PACKETS_MD5, "decrypted cenc audio packets must match the independent reference decrypt");
     }
     let _ = std::fs::remove_file(&out);
 }
 
 #[test]
-fn cbcs_audio_decrypts_and_matches_independently_decrypted_pcm() {
-    const EXPECTED_PCM_MD5: &str = "1b7117f565f59cabebfe43a9c020db40";
+fn cbcs_audio_decrypts_to_the_same_packets_as_cenc() {
     let out = unique_temp_path("cbcs-audio-out.mp4");
     let args = base_args(
         fixture("cbcs_audio.mp4"),
@@ -97,8 +101,8 @@ fn cbcs_audio_decrypts_and_matches_independently_decrypted_pcm() {
     cli::run(args).expect("cbcs decrypt must succeed");
     assert!(std::fs::metadata(&out).unwrap().len() > 0);
 
-    if let Some(got) = ffmpeg_md5(&out, &["-f", "s16le"]) {
-        assert_eq!(got, EXPECTED_PCM_MD5, "decrypted cbcs audio PCM must match the independent reference decrypt");
+    if let Some(got) = ffmpeg_md5(&out, &["-map", "0:a:0", "-c", "copy"]) {
+        assert_eq!(got, EXPECTED_AUDIO_PACKETS_MD5, "decrypted cbcs audio packets must equal the cenc ones (same clear content)");
     }
     let _ = std::fs::remove_file(&out);
 }

@@ -35,6 +35,9 @@ fn extract_text_args(input: PathBuf, output: PathBuf) -> Args {
         parallel_decrypt_min_kb: None,
         io_depth: None,
         no_profile: true,
+        chunks: None,
+        in_place: false,
+        tfdt_rebase: false,
         daemon: false,
         #[cfg(feature = "sample-aes")]
         aes128: false,

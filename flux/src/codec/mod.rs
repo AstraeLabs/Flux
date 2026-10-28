@@ -9,6 +9,7 @@ pub mod hevc_config;
 pub mod mp4esds;
 pub mod mpeg_legacy;
 pub mod mpegh;
+pub mod mlp;
 pub mod nalu_types;
 pub mod opus;
 pub mod sps;

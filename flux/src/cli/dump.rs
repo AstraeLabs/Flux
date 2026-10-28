@@ -363,6 +363,24 @@ pub(super) fn dump_streams(
                 sample_size,
                 ..
             }
+            | CodecConfig::Eac3Joc {
+                channel_count,
+                sample_rate,
+                sample_size,
+                ..
+            }
+            | CodecConfig::DtsX {
+                channel_count,
+                sample_rate,
+                sample_size,
+                ..
+            }
+            | CodecConfig::TrueHd {
+                channel_count,
+                sample_rate,
+                sample_size,
+                ..
+            }
             | CodecConfig::Opus {
                 channel_count,
                 sample_rate,

@@ -6,6 +6,7 @@ use crate::ac3::{Ac3SpecificBox, Ec3SpecificBox};
 use crate::ac4::Ac4SpecificBox;
 use crate::av1::Av1ConfigurationBox;
 use crate::avc_config::AVCConfigurationBox;
+use crate::codec::mlp::MlpSpecificBox;
 use crate::dts::DtsSpecificBox;
 use crate::flac::FlacSpecificBox;
 use crate::hevc_config::HEVCConfigurationBox;
@@ -70,6 +71,12 @@ pub enum CodecConfig {
         sample_rate: u32,
         sample_size: u16,
     },
+    Eac3Joc {
+        config: Ec3SpecificBox,
+        channel_count: u16,
+        sample_rate: u32,
+        sample_size: u16,
+    },
     Av1 {
         config: Av1ConfigurationBox,
         width: u16,
@@ -123,6 +130,19 @@ pub enum CodecConfig {
         sample_rate: u32,
         sample_size: u16,
     },
+    DtsX {
+        config: DtsSpecificBox,
+        codec_fourcc: [u8; 4],
+        channel_count: u16,
+        sample_rate: u32,
+        sample_size: u16,
+    },
+    TrueHd {
+        config: MlpSpecificBox,
+        channel_count: u16,
+        sample_rate: u32,
+        sample_size: u16,
+    },
     Vp8 {
         config: crate::vp9::Vp9ConfigurationBox,
         width: u16,
@@ -145,11 +165,14 @@ impl CodecConfig {
             CodecConfig::Aac { .. }
                 | CodecConfig::Ac3 { .. }
                 | CodecConfig::Eac3 { .. }
+                | CodecConfig::Eac3Joc { .. }
                 | CodecConfig::Opus { .. }
                 | CodecConfig::Flac { .. }
                 | CodecConfig::Ac4 { .. }
                 | CodecConfig::MpegH { .. }
                 | CodecConfig::Dts { .. }
+                | CodecConfig::DtsX { .. }
+                | CodecConfig::TrueHd { .. }
                 | CodecConfig::MpegAudio { .. }
                 | CodecConfig::Vorbis { .. }
         )
@@ -170,12 +193,15 @@ impl CodecConfig {
             CodecConfig::Aac { sample_rate, .. }
             | CodecConfig::Ac3 { sample_rate, .. }
             | CodecConfig::Eac3 { sample_rate, .. }
+            | CodecConfig::Eac3Joc { sample_rate, .. }
             | CodecConfig::Opus { sample_rate, .. }
             | CodecConfig::Flac { sample_rate, .. }
             | CodecConfig::Ac4 { sample_rate, .. }
             | CodecConfig::MpegH { sample_rate, .. }
-            | CodecConfig::MpegAudio { sample_rate, .. }
-            | CodecConfig::Dts { sample_rate, .. } => Some(*sample_rate).filter(|r| *r != 0),
+            | CodecConfig::Dts { sample_rate, .. }
+            | CodecConfig::DtsX { sample_rate, .. }
+            | CodecConfig::TrueHd { sample_rate, .. }
+            | CodecConfig::MpegAudio { sample_rate, .. } => Some(*sample_rate).filter(|r| *r != 0),
             _ => None,
         }
     }

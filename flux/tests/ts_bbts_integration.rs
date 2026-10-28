@@ -20,7 +20,7 @@ fn ffmpeg_stream_md5(path: &Path, map: &str) -> Option<String> {
     let output = Command::new("ffmpeg")
         .args(["-v", "error", "-i"])
         .arg(path)
-        .args(["-map", map, "-f", "md5", "-"])
+        .args(["-map", map, "-c:a", "copy", "-f", "md5", "-"])
         .output()
         .ok()?;
     if !output.status.success() {
@@ -51,6 +51,9 @@ fn run_sample_aes_ts(input: PathBuf, output: PathBuf) {
         parallel_decrypt_min_kb: None,
         io_depth: None,
         no_profile: false,
+        chunks: None,
+        in_place: false,
+        tfdt_rebase: false,
         daemon: false,
         #[cfg(feature = "sample-aes")]
         aes128: false,
@@ -63,7 +66,7 @@ fn run_sample_aes_ts(input: PathBuf, output: PathBuf) {
 #[test]
 fn ts_bbts_decrypt_matches_the_original_clear_source_checksums() {
     const EXPECTED_VIDEO_MD5: &str = "9fd4d2df5086889ba95c9c33a15ea49b";
-    const EXPECTED_AUDIO_MD5: &str = "d126103e6db02b50f8d2c76beb8e45db";
+    const EXPECTED_AUDIO_MD5: &str = "4fadca0f73c14cde223974fbc9c9d1a6";
 
     let out = unique_temp_path("ts-bbts-out.ts");
     run_sample_aes_ts(fixture("synthetic_bbts.ts"), out.clone());

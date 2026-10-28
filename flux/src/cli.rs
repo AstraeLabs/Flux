@@ -12,6 +12,8 @@ mod dump;
 #[cfg(feature = "cenc")]
 mod extract_text;
 #[cfg(feature = "cenc")]
+mod inplace;
+#[cfg(feature = "cenc")]
 mod key_sanity;
 #[cfg(all(feature = "cli", feature = "cenc"))]
 mod scan;
@@ -60,6 +62,7 @@ bitforge::impl_spec_display!(Container);
 #[non_exhaustive]
 pub enum OutputFormat {
     Progressive,
+    FragmentedDecrypt,
     WebmDecrypt,
     Aes128Raw,
     TsSampleAes,
@@ -69,6 +72,7 @@ impl OutputFormat {
     pub fn name(&self) -> &'static str {
         match self {
             OutputFormat::Progressive => "progressive",
+            OutputFormat::FragmentedDecrypt => "fragmented mp4 (size-preserving decrypt)",
             OutputFormat::WebmDecrypt => "webm (in-place decrypt)",
             OutputFormat::Aes128Raw => "raw (aes-128-cbc decrypt)",
             OutputFormat::TsSampleAes => "mpeg-ts (experimental in-place sample-aes decrypt)",
@@ -108,7 +112,7 @@ pub struct Args {
     )]
     pub version: Option<bool>,
 
-    #[arg(value_name = "IN", required_unless_present = "input")]
+    #[arg(value_name = "IN", required_unless_present_any = ["input", "chunks"])]
     pub in_positional: Option<PathBuf>,
 
     #[arg(
@@ -124,10 +128,47 @@ pub struct Args {
         short = 'o',
         long = "output",
         value_name = "PATH",
-        required_unless_present = "dump",
+        required_unless_present_any = ["dump", "in_place"],
+        conflicts_with = "in_place",
         help_heading = "Input/Output"
     )]
     pub output: Option<PathBuf>,
+
+    /// Read the input as the concatenation of the seg_<n>.mp4 files in DIR (no binary merge).
+    /// With -o the output is the decrypted fragmented MP4, same layout and size as the
+    /// concatenated input; with --in-place the chunks are rewritten where they are
+    #[cfg(feature = "cenc")]
+    #[arg(
+        long = "chunks",
+        value_name = "DIR",
+        conflicts_with_all = ["in_positional", "input", "dump", "extract_text", "fragments_info"],
+        help_heading = "Input/Output"
+    )]
+    pub chunks: Option<PathBuf>,
+
+    /// Decrypt a fragmented MP4 (or the --chunks set) on top of itself instead of writing -o.
+    /// Size-preserving: samples are decrypted at their own offsets and the encryption boxes
+    /// become `free`. DESTRUCTIVE: an interrupted run leaves a half-decrypted file
+    #[cfg(feature = "cenc")]
+    #[arg(
+        long = "in-place",
+        conflicts_with_all = ["dump", "extract_text", "fragments_info"],
+        help_heading = "Input/Output"
+    )]
+    pub in_place: bool,
+
+    /// Rebase the fragments' baseMediaDecodeTime (tfdt) in the OUTPUT so the first
+    /// one is zero (CMAF/DASH absolute tfdt -> player-friendly 0 start), mirroring
+    /// `rebase_fragment_timestamps()`. tfdt is plaintext, so this patches the output
+    /// bytes in flight; the input is never modified. Applies to fragmented MP4
+    /// outputs (--chunks, --in-place, -o/-); ignored elsewhere.
+    #[cfg(feature = "cenc")]
+    #[arg(
+        long = "tfdt-rebase",
+        conflicts_with_all = ["dump", "extract_text", "fragments_info"],
+        help_heading = "Input/Output"
+    )]
+    pub tfdt_rebase: bool,
 
     /// Output container format
     #[arg(short = 'f', long = "format", value_enum, help_heading = "Input/Output")]
@@ -292,7 +333,7 @@ impl fmt::Display for CliError {
             CliError::KeySanityCheckFailed { track_id, detail } => write!(
                 f,
                 "decrypt likely failed: key is wrong for track {track_id}'s KID -- decoding the \
-                 first decrypted frame produced invalid video ({detail}). CENC/AES-CTR has no \
+                 first decrypted frame produced invalid media ({detail}). CENC/AES-CTR has no \
                  built-in integrity check, so a wrong key still produces a same-length output; \
                  this is caught by test-decoding the first frame instead"
             ),
@@ -371,6 +412,9 @@ fn package(media: &Media, opts: &Opts) -> CliResult<Output> {
             let media = filter_for_bmff_mux(media)?;
             Ok(Output::Bytes(ProgressiveMux::new(true).package(&media)?))
         }
+        OutputFormat::FragmentedDecrypt => Err(CliError::Flux(crate::Error::InvalidInput(
+            "fragmented decrypt never goes through the Media-IR package() path",
+        ))),
         OutputFormat::WebmDecrypt => Err(CliError::Flux(crate::Error::InvalidInput(
             "webm decrypt never goes through the Media-IR package() path",
         ))),
@@ -458,11 +502,28 @@ fn parallel_decrypt_threshold() -> usize {
         .unwrap_or(512 * 1024)
 }
 
+/// The content key of one sample: the KID of its `seig` sample group when the fragment rotates keys,
+/// otherwise the track's own key.
+#[cfg(feature = "cenc")]
+fn sample_key<'a>(
+    entry: &crate::cenc::SampleEncryptionEntry,
+    track_key: &'a [u8; 16],
+    keys: &'a crate::cenc_decrypt::KeyMap,
+) -> Result<&'a [u8; 16], crate::Error> {
+    match entry.explicit_kid {
+        Some(kid) => keys.get(&kid).ok_or(crate::Error::InvalidInput(
+            "no content key for this sample's seig key_id",
+        )),
+        None => Ok(track_key),
+    }
+}
+
 #[cfg(feature = "cenc")]
 fn decrypt_run_maybe_parallel(
     crypto_track: &crate::cenc_decrypt::TrackCrypto,
     entries: &[crate::cenc::SampleEncryptionEntry],
     key: &[u8; 16],
+    keys: &crate::cenc_decrypt::KeyMap,
     buf: &mut [u8],
     sizes: &[usize],
     scratch: &mut crate::cenc_decrypt::DecryptScratch,
@@ -487,7 +548,7 @@ fn decrypt_run_maybe_parallel(
                 crypto_track.scheme,
                 &crypto_track.tenc,
                 &entries[i],
-                key,
+                sample_key(&entries[i], key, keys)?,
                 sample,
                 scratch,
             )?;
@@ -516,14 +577,17 @@ fn decrypt_run_maybe_parallel(
             s.spawn(move || {
                 let mut scratch = crate::cenc_decrypt::DecryptScratch::default();
                 for (sample, entry) in group.into_iter().zip(entry_group.iter()) {
-                    if let Err(e) = crate::cenc_decrypt::decrypt_sample_slice(
-                        crypto_track.scheme,
-                        &crypto_track.tenc,
-                        entry,
-                        key,
-                        sample,
-                        &mut scratch,
-                    ) {
+                    let result = sample_key(entry, key, keys).and_then(|k| {
+                        crate::cenc_decrypt::decrypt_sample_slice(
+                            crypto_track.scheme,
+                            &crypto_track.tenc,
+                            entry,
+                            k,
+                            sample,
+                            &mut scratch,
+                        )
+                    });
+                    if let Err(e) = result {
                         *error.lock().unwrap() = Some(e);
                         return;
                     }
@@ -573,8 +637,6 @@ struct DaemonJob {
     ffmpeg_path: Option<String>,
     #[serde(default)]
     key_sanity: bool,
-    #[serde(default)]
-    aes128: bool,
 }
 
 #[cfg(all(feature = "cli", feature = "cenc"))]
@@ -727,9 +789,12 @@ pub fn run_daemon() -> std::process::ExitCode {
                     parallel_decrypt_min_kb: None,
                     io_depth: None,
                     no_profile: false,
+                    chunks: None,
+                    in_place: false,
+                    tfdt_rebase: false,
                     daemon: false,
                     #[cfg(feature = "sample-aes")]
-                    aes128: job.aes128,
+                    aes128: false,
                     #[cfg(feature = "sample-aes")]
                     sample_aes_ts: false,
                 };
@@ -850,6 +915,9 @@ fn run_guarded(args: &Args) -> CliResult<(Container, OutputFormat)> {
     if args.dump {
         return run_impl(args, None);
     }
+    if args.in_place || args.chunks.is_some() {
+        return run_fmp4_inplace(args);
+    }
     let Some(out) = args.output.as_deref() else {
         return Err(CliError::Flux(crate::Error::InvalidInput(
             "-o/--output is required",
@@ -862,6 +930,46 @@ fn run_guarded(args: &Args) -> CliResult<(Container, OutputFormat)> {
     }
     ensure_output_distinct(&inputs, out)?;
     run_impl(args, Some(out))
+}
+
+/// `-o -` streams raw MP4 bytes: on a terminal that only prints garbage (and corrupts the console).
+pub fn ensure_stdout_is_not_a_terminal(is_terminal: bool) -> CliResult<()> {
+    if is_terminal {
+        return Err(invalid("refusing to write media to a terminal; pipe or redirect `-o -` (e.g. `| ffmpeg -f mp4 -i -`)"));
+    }
+    Ok(())
+}
+
+/// `--in-place` and/or `--chunks`: size-preserving decrypt of a fragmented MP4.
+#[cfg(feature = "cenc")]
+fn run_fmp4_inplace(args: &Args) -> CliResult<(Container, OutputFormat)> {
+    init_runtime_config(args);
+    if !args.tracks.is_empty() {
+        return Err(invalid("--tracks is not supported with --in-place/--chunks"));
+    }
+    let paths: Vec<PathBuf> = match &args.chunks {
+        Some(dir) => inplace::list_chunks(dir)?,
+        None => vec![input_path(args).to_path_buf()],
+    };
+    if args.in_place {
+        let set = inplace::ChunkSet::open(&paths, true)?;
+        inplace::decrypt_fmp4(&set, inplace::Dest::InPlace, &args.keys, args.ffmpeg_path.as_deref(), args.tfdt_rebase)?;
+    } else {
+        let out = args.output.as_deref().ok_or(CliError::Flux(crate::Error::InvalidInput(
+            "-o/--output is required",
+        )))?;
+        let to_stdout = out == Path::new("-");
+        if to_stdout {
+            ensure_stdout_is_not_a_terminal(std::io::IsTerminal::is_terminal(&std::io::stdout()))?;
+        } else {
+            let inputs: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
+            ensure_output_distinct(&inputs, out)?;
+        }
+        let set = inplace::ChunkSet::open(&paths, false)?;
+        let dest = if to_stdout { inplace::Dest::Stdout } else { inplace::Dest::File(out) };
+        inplace::decrypt_fmp4(&set, dest, &args.keys, args.ffmpeg_path.as_deref(), args.tfdt_rebase)?;
+    }
+    Ok((Container::Mp4, OutputFormat::FragmentedDecrypt))
 }
 
 #[cfg(feature = "cenc")]
@@ -1433,6 +1541,7 @@ fn run_pass2(
     track_codecs: &[crate::CodecConfig],
     crypto_tracks: &[crate::cenc_decrypt::TrackCrypto],
     track_keys: &[Option<[u8; 16]>],
+    key_map: &crate::cenc_decrypt::KeyMap,
     ffmpeg_path: Option<&Path>,
     p2_read: &mut std::time::Duration,
     p2_crypto: &mut std::time::Duration,
@@ -1501,7 +1610,7 @@ fn run_pass2(
                 let sizes: Vec<usize> = layouts.iter().map(|l| l.size as usize).collect();
                 let __s = std::time::Instant::now();
                 if let Err(e) =
-                    decrypt_run_maybe_parallel(crypto_track, entries, key, &mut buf, &sizes, &mut scratch)
+                    decrypt_run_maybe_parallel(crypto_track, entries, key, key_map, &mut buf, &sizes, &mut scratch)
                 {
                     result = Err(e);
                     return false;
@@ -1543,6 +1652,7 @@ fn run_pass2(
     track_codecs: &[crate::CodecConfig],
     crypto_tracks: &[crate::cenc_decrypt::TrackCrypto],
     track_keys: &[Option<[u8; 16]>],
+    key_map: &crate::cenc_decrypt::KeyMap,
     ffmpeg_path: Option<&Path>,
     p2_read: &mut std::time::Duration,
     p2_crypto: &mut std::time::Duration,
@@ -1584,6 +1694,7 @@ fn run_pass2(
                     crypto_track,
                     run_entries,
                     key,
+                    key_map,
                     &mut buf,
                     &sizes,
                     &mut cbc_scratch,
@@ -1945,6 +2056,7 @@ fn stream_decrypt_to_progressive_mp4(
             &track_codecs,
             &crypto_tracks,
             &track_keys,
+            &key_map,
             ffmpeg_path,
             &mut __p2_read,
             &mut __p2_crypto,
@@ -2073,10 +2185,13 @@ fn codec_label(cfg: &crate::CodecConfig) -> &'static str {
         CodecConfig::Aac { .. } => "mp4a (AAC)",
         CodecConfig::Ac3 { .. } => "ac-3",
         CodecConfig::Eac3 { .. } => "ec-3 (E-AC-3)",
+        CodecConfig::Eac3Joc { .. } => "ec-3 (E-AC-3 JOC)",
         CodecConfig::Ac4 { .. } => "ac-4",
         CodecConfig::Opus { .. } => "Opus",
         CodecConfig::Flac { .. } => "fLaC",
         CodecConfig::Dts { .. } => "DTS",
+        CodecConfig::DtsX { .. } => "DTS:X",
+        CodecConfig::TrueHd { .. } => "mlpa (TrueHD)",
         CodecConfig::MpegH { .. } => "MPEG-H 3D Audio",
         CodecConfig::MpegAudio { .. } => "MPEG-1/2 Audio",
         CodecConfig::Vorbis { .. } => "Vorbis",
@@ -2641,6 +2756,7 @@ fn decrypt_fragment(
                     crypto_track,
                     &ft.crypto[run_start..run_start + run_len],
                     key,
+                    &key_map,
                     &mut data[buf_start..buf_end],
                     &sizes[run_start..run_start + run_len],
                     &mut cbc_scratch,

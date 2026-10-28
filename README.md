@@ -19,6 +19,16 @@ flux input.mp4 --dump --json
 
 # Extract a WebVTT-in-MP4 subtitle track
 flux input.mp4 --extract-text -o subs.vtt
+
+# Decrypt a fragmented MP4 on top of itself (same size, no second file)
+flux input.mp4 --in-place --key <KID>:<KEY>
+
+# Same for a download split in seg_<n>.mp4 chunks, without merging them first
+flux --chunks ./v_1920x1080 --in-place --key <KID>:<KEY>
+ffmpeg -i "concat:seg_00000.mp4|seg_00001.mp4|..." -c copy video.mkv
+
+# Or stream the decrypted chunks straight into ffmpeg, leaving the chunks untouched
+flux --chunks ./v_1920x1080 --key <KID>:<KEY> -o - --tfdt-rebase | ffmpeg -f mp4 -i - -c copy video.mkv
 ```
 
 Only `--key` values matter for decryption: keys are never read from environment variables. Note that anything passed on the command line is visible to other local users in the process list, and Flux never prints a key value in error messages.
@@ -28,7 +38,7 @@ Only `--key` values matter for decryption: keys are never read from environment 
 | Flag | Description |
 |---|---|
 | `<IN>` / `-i, --input <PATH>` | Input file (positional or `-i`, not both). |
-| `-o, --output <PATH>` | Output file. Required unless `--dump`. Must differ from the input. |
+| `-o, --output <PATH>` | Output file. Required unless `--dump` or `--in-place`. Must differ from the input. |
 | `-f, --format <FORMAT>` | Only `progressive`. Inferred from `.mp4` / `.m4v`. |
 | `--tracks <IDS>` | Comma-separated track IDs to keep (default: all). |
 | `-d, --dump` | Print track metadata and exit. |
@@ -36,6 +46,10 @@ Only `--key` values matter for decryption: keys are never read from environment 
 | `--extract-text` | Extract a `wvtt` track to `.vtt` (needs `-o`; use `--tracks` if several). |
 | `--key <KID:KEY>` | Content key, repeatable. |
 | `--fragments-info <INIT>` | Decrypt a bare fragment using this init segment. |
+| `--in-place` | Decrypt a fragmented MP4 (or the `--chunks` set) where it is. The result is a clear fragmented MP4 of the same size: samples are decrypted at their own offsets, `senc`/`saiz`/`saio`/`sinf`/`pssh` become `free`. No `-o`. Destructive: an interrupted run leaves a half-decrypted file, so use it on disposable downloads. The wrong-key check runs before anything is written, and the init is patched last. Does not support `--tracks`. |
+| `--chunks <DIR>` | Read the `seg_<n>.mp4` files of `DIR` as one concatenated input (numbering must have no gaps). With `-o` the output is the decrypted fragmented MP4 (not progressive); with `--in-place` the chunks are rewritten. |
+| `-o -` | With `--chunks` or a single fragmented input: stream the decrypted fMP4 to stdout, e.g. `flux --chunks DIR --key K -o - \| ffmpeg -f mp4 -i - -c copy out.mkv` (give ffmpeg `-f mp4`, it cannot probe a pipe reliably). No merge step and no temporary file. Refused when stdout is a terminal. A wrong key, truncated chunks or an IV-in-`mdat` fragment are refused up front: non-zero exit and nothing on stdout. An I/O error half way through also exits non-zero but leaves a truncated stream, so always check the exit status of both ends of the pipe. |
+| `--tfdt-rebase` | With `--chunks`/`--in-place`/`-o -`: subtract the first fragment's `tfdt` from every fragment, so the timeline starts at 0 (what a live-decrypted track needs before muxing). Done while the bytes stream by, so there is no second pass over the file. |
 | `--ffmpeg-path <PATH>` | `ffmpeg` binary used for the wrong-key check (default: `ffmpeg` on `PATH`). |
 | `--key-sanity-check` | Run the wrong-key check on a `--fragments-info` job. |
 | `--skip-key-sanity-check` | Skip the post-decrypt wrong-key check. |
@@ -49,7 +63,19 @@ Only `--key` values matter for decryption: keys are never read from environment 
 
 There are no environment variables. Exit code is `0` on success and `1` on any error.
 
-The wrong-key check runs `ffmpeg` on the first decrypted frame, because CENC has no integrity check and a wrong key yields garbage of the same size. It needs `ffmpeg` on `PATH` (or `--ffmpeg-path`), and is on by default for normal decrypts.
+The wrong-key check runs `ffmpeg` on the first decrypted samples, because CENC has no integrity check and a wrong key yields garbage of the same size. It needs `ffmpeg` on `PATH` (or `--ffmpeg-path`), and is on by default for normal decrypts. What it can prove depends on the codec:
+
+| Codec | Check | Reliability (measured, wrong key) |
+|---|---|---|
+| H.264 | test decode of the sync sample | caught every time |
+| AAC | ADTS-wrapped test decode of 8 samples | caught every time |
+| AC-3 / E-AC-3 | `0x0B77` syncword on 4 samples | caught every time (miss probability 2^-16 per sample) |
+| HEVC | test decode of the first 25 samples | probabilistic: libavcodec often decodes garbage CABAC data without a message, so some wrong keys pass |
+| AV1, VP9, Opus, DTS, ... | none | not checked |
+
+For HEVC (and the codecs without a check) verify the result by decoding some of the output, for instance the last seconds with `ffmpeg -sseof -4 -i out.mp4 -f null -`.
+
+A fragment whose samples use different keys (`seig` sample groups, key rotation) is decrypted with the key of each sample's group. Every KID it names has to be given with `--key`; a missing one is an error, never a silent fallback to the track's key.
 
 Inputs carrying a `4snf` box (FairPlay-style SAMPLE-AES, not CENC) are refused.
 

@@ -37,12 +37,17 @@ pub(crate) fn rfc6381_codec_string(cfg: &CodecConfig) -> String {
         CodecConfig::Aac { esds, .. } => aac_codec_string(esds),
         CodecConfig::Ac3 { .. } => String::from("ac-3"),
         CodecConfig::Eac3 { .. } => String::from("ec-3"),
+        CodecConfig::Eac3Joc { .. } => String::from("ec-3"),
         CodecConfig::Ac4 { .. } => String::from("ac-4"),
         CodecConfig::Opus { .. } => String::from("opus"),
         CodecConfig::Flac { .. } => String::from("fLaC"),
         CodecConfig::Dts { codec_fourcc, .. } => {
             String::from_utf8_lossy(codec_fourcc).into_owned()
         }
+        CodecConfig::DtsX { codec_fourcc, .. } => {
+            String::from_utf8_lossy(codec_fourcc).into_owned()
+        }
+        CodecConfig::TrueHd { .. } => String::from("mlpa"),
         CodecConfig::MpegH { .. } => String::from("mhm1"),
         CodecConfig::Mpeg2Video { esds, .. } => {
             let oti = esds

@@ -351,18 +351,19 @@ fn rewrite_cluster(cluster: &[u8], track_keys: &BTreeMap<u64, [u8; KEY_LEN]>) ->
 }
 
 enum LaceKind {
+    None,
     Xiph,
     Ebml,
     FixedSize,
 }
 
-fn lace_kind_from_flags(flags: u8) -> Option<LaceKind> {
+fn lace_kind_from_flags(flags: u8) -> Result<LaceKind> {
     match (flags & BLOCK_FLAG_LACING_MASK) >> 1 {
-        0 => None,
-        1 => Some(LaceKind::Xiph),
-        2 => Some(LaceKind::FixedSize),
-        3 => Some(LaceKind::Ebml),
-        _ => unreachable!("2-bit field"),
+        0 => Ok(LaceKind::None),
+        1 => Ok(LaceKind::Xiph),
+        2 => Ok(LaceKind::FixedSize),
+        3 => Ok(LaceKind::Ebml),
+        _ => Err(crate::error::Error::InvalidInput("invalid lace kind flags (reserved 2-bit value)")),
     }
 }
 
@@ -384,8 +385,8 @@ fn rewrite_block_bytes(body: &[u8], track_keys: &BTreeMap<u64, [u8; KEY_LEN]>) -
     let payload = &body[tn_len + 3..];
 
     let new_payload = match lace_kind_from_flags(flags) {
-        None => decrypt_block_frame(payload, key)?,
-        Some(kind) => {
+        Ok(LaceKind::None) => decrypt_block_frame(payload, key)?,
+        Ok(kind) => {
             let frames = split_laced_frames(kind, payload)?;
             let mut decrypted = Vec::with_capacity(frames.len());
             for f in frames {
@@ -395,6 +396,7 @@ fn rewrite_block_bytes(body: &[u8], track_keys: &BTreeMap<u64, [u8; KEY_LEN]>) -
             header[tn_len + 2] = (flags & !BLOCK_FLAG_LACING_MASK) | (0b11 << 1);
             relaced
         }
+        Err(e) => return Err(e),
     };
 
     let mut out = Vec::with_capacity(header.len() + new_payload.len());
@@ -412,6 +414,7 @@ fn split_laced_frames(kind: LaceKind, payload: &[u8]) -> Result<Vec<&[u8]>> {
     let mut sizes: Vec<usize> = Vec::with_capacity(frame_count.saturating_sub(1));
 
     match kind {
+        LaceKind::None => {}
         LaceKind::FixedSize => {}
         LaceKind::Xiph => {
             for _ in 0..frame_count - 1 {

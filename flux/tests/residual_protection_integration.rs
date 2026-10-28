@@ -59,6 +59,9 @@ fn clears_residual_protection_after_flux_decrypts_it() {
         parallel_decrypt_min_kb: None,
         io_depth: None,
         no_profile: true,
+        chunks: None,
+        in_place: false,
+        tfdt_rebase: false,
         daemon: false,
         #[cfg(feature = "sample-aes")]
         aes128: false,
