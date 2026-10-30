@@ -170,6 +170,20 @@ pub struct Args {
     )]
     pub tfdt_rebase: bool,
 
+    /// With --fragments-info: subtract N from the baseMediaDecodeTime (tfdt) of the decrypted
+    /// fragment, so a live track's segments (one job each) share one zero. The caller reads the
+    /// first segment's tfdt once and passes the same N for every segment of the track; flux keeps
+    /// no state between jobs. tfdt is plaintext, so the first segment's value can be read before
+    /// decrypting. Values are clamped at zero, like --tfdt-rebase
+    #[cfg(feature = "cenc")]
+    #[arg(
+        long = "tfdt-base",
+        value_name = "N",
+        requires = "fragments_info",
+        help_heading = "CENC decrypt"
+    )]
+    pub tfdt_base: Option<u64>,
+
     /// Output container format
     #[arg(short = 'f', long = "format", value_enum, help_heading = "Input/Output")]
     pub format: Option<FormatArg>,
@@ -637,6 +651,8 @@ struct DaemonJob {
     ffmpeg_path: Option<String>,
     #[serde(default)]
     key_sanity: bool,
+    #[serde(default)]
+    tfdt_base: Option<u64>,
 }
 
 #[cfg(all(feature = "cli", feature = "cenc"))]
@@ -792,6 +808,7 @@ pub fn run_daemon() -> std::process::ExitCode {
                     chunks: None,
                     in_place: false,
                     tfdt_rebase: false,
+                    tfdt_base: job.tfdt_base,
                     daemon: false,
                     #[cfg(feature = "sample-aes")]
                     aes128: false,
@@ -1045,6 +1062,7 @@ fn run_impl(args: &Args, output: Option<&Path>) -> CliResult<(Container, OutputF
                 &args.tracks,
                 args.ffmpeg_path.as_deref(),
                 args.key_sanity_check,
+                args.tfdt_base,
             )?;
             return Ok((Container::Mp4, OutputFormat::Progressive));
         }
@@ -2644,6 +2662,7 @@ fn decrypt_fragment(
     tracks_filter: &[u32],
     ffmpeg_path: Option<&Path>,
     key_sanity_check: bool,
+    tfdt_base: Option<u64>,
 ) -> CliResult<()> {
     use crate::cenc_decrypt::{self, KeyMap};
 
@@ -2796,8 +2815,11 @@ fn decrypt_fragment(
         let moof_off = *moof_off as usize;
         let moof_end = moof_off + *moof_size as usize;
         out.extend_from_slice(&data[pos..moof_off]);
-        let (stripped, total_removed) =
+        let (mut stripped, total_removed) =
             cenc_decrypt::strip_sample_encryption_boxes(&data[moof_off..moof_end], bytes_removed_before);
+        if let Some(base) = tfdt_base {
+            inplace::rebase_moof_tfdt(&mut stripped, base);
+        }
         out.extend_from_slice(&stripped);
         bytes_removed_before = total_removed;
         pos = moof_end;

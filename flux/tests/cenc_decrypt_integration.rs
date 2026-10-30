@@ -34,6 +34,7 @@ fn base_args(input: PathBuf, output: PathBuf, keys: Vec<&str>) -> Args {
         chunks: None,
         in_place: false,
         tfdt_rebase: false,
+        tfdt_base: None,
         daemon: false,
         #[cfg(feature = "sample-aes")]
         aes128: false,
@@ -292,4 +293,71 @@ fn fragments_info_init_only_rewrites_encv_stsd_to_clear() {
 
     let _ = std::fs::remove_file(&init_only_path);
     let _ = std::fs::remove_file(&out);
+}
+
+
+/// `(tfdt value width in bytes, baseMediaDecodeTime)` of the first tfdt box found in `fragment`.
+fn first_tfdt(fragment: &[u8]) -> (usize, u64) {
+    let p = fragment.windows(4).position(|w| w == b"tfdt").expect("fragment must carry a tfdt box");
+    if fragment[p + 4] == 1 {
+        (8, u64::from_be_bytes(fragment[p + 8..p + 16].try_into().unwrap()))
+    } else {
+        (4, u64::from(u32::from_be_bytes(fragment[p + 8..p + 12].try_into().unwrap())))
+    }
+}
+
+#[test]
+fn fragments_info_tfdt_base_rebases_the_decrypted_fragment() {
+    let whole = std::fs::read(fixture("cenc_audio.mp4")).unwrap();
+    let boxes = top_level_box_offsets(&whole);
+    let styp_offsets: Vec<usize> =
+        boxes.iter().filter(|(t, _, _)| t == b"styp").map(|(_, o, _)| *o).collect();
+    assert!(styp_offsets.len() >= 3, "fixture must have at least 3 fragments");
+    let init_path = unique_temp_path("cenc-audio-tfdt-init.mp4");
+    std::fs::write(&init_path, &whole[..styp_offsets[0]]).unwrap();
+
+    let decrypt = |fragment: &[u8], base: Option<u64>, name: &str| -> Vec<u8> {
+        let frag_path = unique_temp_path(name);
+        let out = unique_temp_path(&format!("out-{name}"));
+        std::fs::write(&frag_path, fragment).unwrap();
+        let args = Args {
+            fragments_info: Some(init_path.clone()),
+            tfdt_base: base,
+            ..base_args(
+                frag_path.clone(),
+                out.clone(),
+                vec!["f8c80c25690f47368132430e5c6994ce:7bc99cb1dd0623cd0b5065056a57a1dd"],
+            )
+        };
+        cli::run(args).expect("--fragments-info decrypt must succeed");
+        let bytes = std::fs::read(&out).unwrap();
+        let _ = std::fs::remove_file(&frag_path);
+        let _ = std::fs::remove_file(&out);
+        bytes
+    };
+
+    let first = &whole[styp_offsets[0]..styp_offsets[1]];
+    let second = &whole[styp_offsets[1]..styp_offsets[2]];
+    let plain_first = decrypt(first, None, "tfdt-first.mp4");
+    let plain_second = decrypt(second, None, "tfdt-second.mp4");
+    let (width, t_first) = first_tfdt(&plain_first);
+    let (_, t_second) = first_tfdt(&plain_second);
+    assert!(t_second > t_first, "the fixture's fragments must advance in time");
+
+    // One base for the whole track: the first fragment lands on zero, the next keeps its distance.
+    let zero_first = decrypt(first, Some(t_first), "tfdt-first-zero.mp4");
+    let zero_second = decrypt(second, Some(t_first), "tfdt-second-zero.mp4");
+    assert_eq!(first_tfdt(&zero_first).1, 0);
+    assert_eq!(first_tfdt(&zero_second).1, t_second - t_first);
+
+    // Nothing else changes: same size, same bytes outside the tfdt value.
+    assert_eq!(zero_first.len(), plain_first.len());
+    let differing = zero_first.iter().zip(&plain_first).filter(|(a, b)| a != b).count();
+    assert!(differing <= width, "only the tfdt value may differ, {differing} bytes did");
+
+    // A base past the fragment clamps at zero instead of wrapping.
+    let past = decrypt(first, Some(t_first + 1_000_000), "tfdt-first-past.mp4");
+    assert_eq!(first_tfdt(&past).1, 0);
+
+    let _ = std::fs::remove_file(&init_path);
 }

@@ -61,6 +61,7 @@ fn ts_sample_aes_decrypt_matches_the_independently_encrypted_source_checksums() 
         chunks: None,
         in_place: false,
         tfdt_rebase: false,
+        tfdt_base: None,
         daemon: false,
         #[cfg(feature = "sample-aes")]
         aes128: false,

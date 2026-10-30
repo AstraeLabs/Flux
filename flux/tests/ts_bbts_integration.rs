@@ -54,6 +54,7 @@ fn run_sample_aes_ts(input: PathBuf, output: PathBuf) {
         chunks: None,
         in_place: false,
         tfdt_rebase: false,
+        tfdt_base: None,
         daemon: false,
         #[cfg(feature = "sample-aes")]
         aes128: false,

@@ -51,6 +51,7 @@ Only `--key` values matter for decryption: keys are never read from environment 
 | `-o -` | With `--chunks` or a single fragmented input: stream the decrypted fMP4 to stdout, e.g. `flux --chunks DIR --key K -o - \| ffmpeg -f mp4 -i - -c copy out.mkv` (give ffmpeg `-f mp4`, it cannot probe a pipe reliably). No merge step and no temporary file. Refused when stdout is a terminal. A wrong key, truncated chunks or an IV-in-`mdat` fragment are refused up front: non-zero exit and nothing on stdout. An I/O error half way through also exits non-zero but leaves a truncated stream, so always check the exit status of both ends of the pipe. |
 | `--tfdt-rebase` | With `--chunks`/`--in-place`/`-o -`: subtract the first fragment's `tfdt` from every fragment, so the timeline starts at 0 (what a live-decrypted track needs before muxing). Done while the bytes stream by, so there is no second pass over the file. |
 | `--ffmpeg-path <PATH>` | `ffmpeg` binary used for the wrong-key check (default: `ffmpeg` on `PATH`). |
+| `--tfdt-base <N>` | With `--fragments-info`: subtract `N` from the decrypted fragment's `tfdt` (clamped at 0), so one-segment-per-job live decryption zeroes the timeline too. |
 | `--key-sanity-check` | Run the wrong-key check on a `--fragments-info` job. |
 | `--skip-key-sanity-check` | Skip the post-decrypt wrong-key check. |
 | `--writer-buf-kb <KB>` | Output buffer size (default 64). |

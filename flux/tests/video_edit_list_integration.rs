@@ -39,6 +39,7 @@ fn base_args(input: PathBuf, output: PathBuf) -> Args {
         chunks: None,
         in_place: false,
         tfdt_rebase: false,
+        tfdt_base: None,
         daemon: false,
         #[cfg(feature = "sample-aes")]
         aes128: false,

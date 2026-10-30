@@ -399,7 +399,7 @@ fn read_tfdt_value(moof: &[u8], value_off: usize, width: usize) -> u64 {
 /// Rebase every tfdt in `moof` so its baseMediaDecodeTime sits at zero.
 /// Mirrors the Python-side `rebase_fragment_timestamps()` semantics:
 /// `new_value = max(0, value - base)`.
-fn rebase_moof_tfdt(moof: &mut [u8], base: u64) {
+pub(super) fn rebase_moof_tfdt(moof: &mut [u8], base: u64) {
     for (value_off, width) in tfdt_offsets(moof) {
         let rebased = read_tfdt_value(moof, value_off, width).saturating_sub(base);
         if width == 8 {

@@ -30,6 +30,7 @@ fn args() -> Args {
         chunks: None,
         in_place: false,
         tfdt_rebase: false,
+        tfdt_base: None,
         dump: false,
         json: false,
         extract_text: false,
