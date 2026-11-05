@@ -1,0 +1,18 @@
+[
+  {
+    "id": "mss-hevc-4k",
+    "label": "MSS HEVC 4K",
+    "manifest": "https://example.invalid/path/to/title.ism/manifest",
+    "keys": ["<KID 32 hex>:<KEY 32 hex>"],
+    "select_video": "res=\"3840*\":codecs=hvc1:for=best",
+    "range": "00:00-35:00"
+  },
+  {
+    "id": "hls-hevc-4k",
+    "label": "HLS HEVC 4K",
+    "manifest": "https://example.invalid/path/to/master.m3u8?token=...",
+    "keys": ["<KID 32 hex>:<KEY 32 hex>", "<KID 32 hex>:<KEY 32 hex>"],
+    "select_video": "res=\"3840*\":codecs=hvc1:for=best",
+    "range": "00:00-17:00"
+  }
+]

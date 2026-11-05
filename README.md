@@ -91,6 +91,31 @@ Inputs carrying a `4snf` box (FairPlay-style SAMPLE-AES, not CENC) are refused.
 
 Results look like `{"ok":true,"elapsed_ms":12}` or `{"ok":false,"error":"..."}`. Job paths are used as given, so only feed the daemon from a trusted source.
 
+## Benchmark
+
+Flux against Shaka Packager 3.9.3 and Bento4 `mp4decrypt` 1.6.0-641, each with its own default command line, on two real encrypted 4K HEVC video tracks of about 3.9 GB. Run in Docker (Docker Desktop / WSL2, i7-14700F, 28 threads), x86_64, **page cache dropped before every run**, median of 3 runs.
+
+| Title | Tool | Wall (s) | CPU (s) | Peak RSS (MB) | x real time |
+|---|---|---:|---:|---:|---:|
+| MSS, `cenc`, 35 min | Shaka Packager | fails | | | |
+| | Bento4 `mp4decrypt` | 19.4 | 14.4 | 27 | 109 |
+| | **Flux** | **7.5** | 4.5 | 85 | 279 |
+| | Bento4 `--fragments-info`, one process per fragment | 22.5 | 11.4 | 28 | 93 |
+| | **Flux** `--daemon`, one job per fragment | **7.3** | 4.1 | 28 | 290 |
+| HLS, `cbcs`, 22 min | Shaka Packager | 11.4 | 13.8 | 252 | 116 |
+| | Bento4 `mp4decrypt` | 9.2 | 3.6 | 43 | 145 |
+| | **Flux** | **7.1** | 3.4 | 95 | 188 |
+| | Bento4 `--fragments-info`, one process per fragment | 10.8 | 4.4 | 43 | 123 |
+| | **Flux** `--daemon`, one job per fragment | **7.2** | 3.7 | 50 | 184 |
+
+* "x real time" is seconds of video decrypted per second of wall time.
+* Flux rows include its default wrong-key check (`ffmpeg` on the first samples). Without it the whole-file run is 6.7 s (MSS) and 7.0 s (HLS). Other Flux modes (`--in-place`, `--chunks` with no merge step, `-o -`) are in the same range, 6 to 9 s; see `bench/README.md`.
+* Every output is checked: the md5 of the clear video packets is identical for all tools, and ffmpeg decodes the result.
+* Shaka Packager cannot read the PIFF `uuid` sample-encryption box of Smooth Streaming fragments (`IV cannot be empty`), so it has no MSS result.
+* With a cold cache the runs are mostly bound by the virtual disk (about 500 to 600 MB/s), so no tool keeps more than one core busy on average, and some single runs are several times slower than the median. The three tools also produce different containers, so this compares workloads, not only cipher speed.
+
+Reproduce with `bench/fetch.sh` and `bench/docker-bench.sh`, see `bench/README.md`. The inputs are not in the repository.
+
 ## Workspace
 
 | Crate | Purpose |

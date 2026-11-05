@@ -1,0 +1,10 @@
+target/
+target-*/
+.git/
+.github/
+.test-streams/
+.worktree/
+.worktrees/
+.delegate/
+.playwright-mcp/
+bench/results/
