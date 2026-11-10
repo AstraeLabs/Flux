@@ -63,7 +63,10 @@ pub(crate) fn rescale_track_timing_if_needed(
     if timescale == 0 || metas.is_empty() {
         return timescale;
     }
-    let total_ticks: u64 = metas.iter().map(|m| u64::from(m.duration.unwrap_or(0))).sum();
+    let total_ticks: u64 = metas
+        .iter()
+        .map(|m| u64::from(m.duration.unwrap_or(0)))
+        .sum();
     if total_ticks <= SAFE_MAX_TRACK_TICKS {
         return timescale;
     }
@@ -149,8 +152,8 @@ pub(crate) fn rescale_edit_list_media_time(
 
 fn codec_compatible_brand(config: &CodecConfig) -> Option<[u8; 4]> {
     match config {
-        CodecConfig::Avc { .. } => Some(*b"avc1"),
-        CodecConfig::Hevc { .. } => Some(*b"hvc1"),
+        CodecConfig::Avc { codec_fourcc, .. } => Some(*codec_fourcc),
+        CodecConfig::Hevc { codec_fourcc, .. } => Some(*codec_fourcc),
         CodecConfig::Vvc { .. } => Some(*b"vvc1"),
         CodecConfig::Av1 { .. } => Some(*b"av01"),
         CodecConfig::Vp9 { .. } => Some(*b"vp09"),
@@ -385,7 +388,9 @@ impl ProgressiveMux {
         };
 
         let mut compatible_brands = vec![*b"isom", *b"iso2", *b"mp41"];
-        if let Some(codec_brand) = tracks.iter().find_map(|t| codec_compatible_brand(&t.spec.config))
+        if let Some(codec_brand) = tracks
+            .iter()
+            .find_map(|t| codec_compatible_brand(&t.spec.config))
         {
             compatible_brands.push(codec_brand);
         }
@@ -534,8 +539,9 @@ impl ProgressiveMux {
         };
 
         let mut compatible_brands = vec![*b"isom", *b"iso2", *b"mp41"];
-        if let Some(codec_brand) =
-            tracks.iter().find_map(|t| codec_compatible_brand(&t.spec.config))
+        if let Some(codec_brand) = tracks
+            .iter()
+            .find_map(|t| codec_compatible_brand(&t.spec.config))
         {
             compatible_brands.push(codec_brand);
         }
@@ -757,7 +763,7 @@ fn set_track_durations(
                 for entry in &mut elst.entries {
                     let playable = media_duration.saturating_sub(entry.media_time.max(0) as u64);
                     let full = (playable * movie_timescale as u64).div_ceil(ts);
-                    
+
                     // Some packagers write segment_duration in milliseconds against a different movie timescale (e.g. 10 MHz), so the
                     // edit covers only a sliver of the track and players trim the stream to ~0s: restore the full length.
                     let in_ms = playable * 1000 / ts;
@@ -825,7 +831,12 @@ mod edit_list_rescale_tests {
     }
 
     fn media_times(e: &Option<EditListBox>) -> Vec<i64> {
-        e.as_ref().unwrap().entries.iter().map(|x| x.media_time).collect()
+        e.as_ref()
+            .unwrap()
+            .entries
+            .iter()
+            .map(|x| x.media_time)
+            .collect()
     }
 
     #[test]
@@ -847,7 +858,10 @@ mod edit_list_rescale_tests {
         let entry = e.unwrap().entries[0];
         assert_eq!(entry.media_time, 100_000);
         assert_eq!(entry.segment_duration, 1234);
-        assert_eq!((entry.media_rate_integer, entry.media_rate_fraction), (1, 0));
+        assert_eq!(
+            (entry.media_rate_integer, entry.media_rate_fraction),
+            (1, 0)
+        );
     }
 
     #[test]
@@ -891,7 +905,12 @@ mod edit_list_rescale_tests {
     }
     fn metas(count: usize, duration: u32) -> Vec<SampleMeta> {
         (0..count)
-            .map(|_| SampleMeta { duration: Some(duration), composition_offset: 0, size: 1, is_sync: true })
+            .map(|_| SampleMeta {
+                duration: Some(duration),
+                composition_offset: 0,
+                size: 1,
+                is_sync: true,
+            })
             .collect()
     }
 
@@ -903,7 +922,10 @@ mod edit_list_rescale_tests {
     #[test]
     fn timescale_untouched_when_ticks_fit() {
         let mut m = metas(100, 1024);
-        assert_eq!(rescale_track_timing_if_needed(48_000, 48_000, &mut m), 48_000);
+        assert_eq!(
+            rescale_track_timing_if_needed(48_000, 48_000, &mut m),
+            48_000
+        );
         assert_eq!(m[0].duration, Some(1024));
     }
 

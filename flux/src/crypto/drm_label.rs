@@ -121,7 +121,10 @@ mod tests {
     fn system_names(moov: &[u8]) -> Vec<String> {
         harvest_pssh_boxes(moov)
             .into_iter()
-            .map(|p| p.name.unwrap_or_else(|| p.system_id.iter().map(|b| format!("{b:02x}")).collect()))
+            .map(|p| {
+                p.name
+                    .unwrap_or_else(|| p.system_id.iter().map(|b| format!("{b:02x}")).collect())
+            })
             .collect()
     }
 
@@ -131,7 +134,10 @@ mod tests {
         children.extend_from_slice(&pssh_box(&PLAYREADY_SYSTEM_ID));
         let moov = fake_moov(&children);
 
-        assert_eq!(system_names(&moov), vec!["widevine".to_string(), "playready".to_string()]);
+        assert_eq!(
+            system_names(&moov),
+            vec!["widevine".to_string(), "playready".to_string()]
+        );
     }
 
     #[test]
@@ -157,7 +163,10 @@ mod tests {
         children.extend_from_slice(&pssh_box(&WIDEVINE_SYSTEM_ID));
         let moov = fake_moov(&children);
 
-        assert_eq!(system_names(&moov), vec!["aa".repeat(16), "widevine".to_string()]);
+        assert_eq!(
+            system_names(&moov),
+            vec!["aa".repeat(16), "widevine".to_string()]
+        );
     }
 
     #[test]

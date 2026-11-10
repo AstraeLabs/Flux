@@ -9,7 +9,9 @@ use crate::box_types::{BOX_HEADER_MIN_SIZE, parse_box};
 pub use crate::cenc::CencScheme;
 use crate::cenc::{ProtectionSystemSpecificHeaderBox, SampleEncryptionEntry, TrackEncryptionBox};
 use crate::cenc_crypto;
-use crate::drm::{PLAYREADY_SYSTEM_ID, WIDEVINE_SYSTEM_ID, playready_pssh_key_ids, widevine_pssh_key_ids};
+use crate::drm::{
+    PLAYREADY_SYSTEM_ID, WIDEVINE_SYSTEM_ID, playready_pssh_key_ids, widevine_pssh_key_ids,
+};
 use crate::error::{Error, Result};
 use crate::media::Media;
 use crate::movie_fragment::{
@@ -250,7 +252,14 @@ fn is_av_track(trak: &[u8]) -> bool {
         return false;
     };
     hdlr.get(HDLR_HANDLER_TYPE_OFFSET..HDLR_HANDLER_TYPE_OFFSET + 4)
-        .map(|t| t == b"vide" || t == b"soun" || t == b"clcp" || t == b"subp" || t == b"text" || t == b"subt")
+        .map(|t| {
+            t == b"vide"
+                || t == b"soun"
+                || t == b"clcp"
+                || t == b"subp"
+                || t == b"text"
+                || t == b"subt"
+        })
         .unwrap_or(false)
 }
 
@@ -382,9 +391,7 @@ pub(crate) fn moof_sample_encryption_by_track(moof: &[u8]) -> Vec<(u32, bool)> {
     let mut out = Vec::new();
     for traf in iter_child_boxes(moof, b"traf") {
         let track_id = find_box(traf, b"tfhd")
-            .and_then(|tfhd| {
-                TrackFragmentHeaderBox::parse_body(&tfhd[BOX_HEADER_MIN_SIZE..]).ok()
-            })
+            .and_then(|tfhd| TrackFragmentHeaderBox::parse_body(&tfhd[BOX_HEADER_MIN_SIZE..]).ok())
             .map(|h| h.track_id);
         let Some(track_id) = track_id else {
             continue;
@@ -448,20 +455,17 @@ fn harvest_track(file: &[u8], trak: &[u8], fragmented: bool) -> Result<Option<Tr
     let samples = if fragmented {
         Vec::new()
     } else {
-        let base_entries: Option<Vec<SampleEncryptionEntry>> =
-            if let Some(senc) = find_box(stbl, b"senc") {
-                Some(
-                    parse_senc_box(senc, BOX_HEADER_MIN_SIZE, tenc.default_per_sample_iv_size)?
-                        .entries,
-                )
-            } else if let Some(u) = find_uuid_box(stbl, &PIFF_SAMPLE_ENCRYPTION_UUID) {
-                Some(
-                    parse_senc_box(u, UUID_BOX_HEADER_SIZE, tenc.default_per_sample_iv_size)?
-                        .entries,
-                )
-            } else {
-                None
-            };
+        let base_entries: Option<Vec<SampleEncryptionEntry>> = if let Some(senc) =
+            find_box(stbl, b"senc")
+        {
+            Some(
+                parse_senc_box(senc, BOX_HEADER_MIN_SIZE, tenc.default_per_sample_iv_size)?.entries,
+            )
+        } else if let Some(u) = find_uuid_box(stbl, &PIFF_SAMPLE_ENCRYPTION_UUID) {
+            Some(parse_senc_box(u, UUID_BOX_HEADER_SIZE, tenc.default_per_sample_iv_size)?.entries)
+        } else {
+            None
+        };
         match base_entries {
             Some(entries) => {
                 if entries.is_empty() && tenc.default_per_sample_iv_size == 0 {
@@ -479,17 +483,12 @@ fn harvest_track(file: &[u8], trak: &[u8], fragmented: bool) -> Result<Option<Tr
                 }
             }
             None => {
-                match resolve_aux_from_saiz_saio(
-                    file,
-                    stbl,
-                    tenc.default_per_sample_iv_size,
-                    0,
-                ) {
+                match resolve_aux_from_saiz_saio(file, stbl, tenc.default_per_sample_iv_size, 0) {
                     Some(entries) => entries,
                     None => {
                         return Err(Error::UnexpectedBox {
                             expected: "senc or saiz/saio",
-                        })?
+                        })?;
                     }
                 }
             }
@@ -739,180 +738,186 @@ fn parse_one_aux_entry(aux: &[u8], per_sample_iv_size: u8) -> Option<SampleEncry
     parsed.entries.into_iter().next()
 }
 
-    #[derive(Debug, Clone, Default)]
-    pub(crate) struct SeigGroup {
-        pub is_protected: bool,
-        pub kid: Option<[u8; 16]>,
-    }
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SeigGroup {
+    pub is_protected: bool,
+    pub kid: Option<[u8; 16]>,
+}
 
-    #[derive(Debug, Clone, Default)]
-    pub(crate) struct SeigData {
-        pub groups: Vec<SeigGroup>,
-    }
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SeigData {
+    pub groups: Vec<SeigGroup>,
+}
 
-    const SEIG_GROUPING_TYPE: &[u8; 4] = b"seig";
+const SEIG_GROUPING_TYPE: &[u8; 4] = b"seig";
 
-    fn parse_seig_groups(body: &[u8]) -> Result<Vec<SeigGroup>> {
-        let short = |need: usize| Error::BufferTooShort {
-            need,
+fn parse_seig_groups(body: &[u8]) -> Result<Vec<SeigGroup>> {
+    let short = |need: usize| Error::BufferTooShort {
+        need,
+        have: body.len(),
+        what: "sgpd seig",
+    };
+    if body.len() < 8 {
+        return Err(Error::BufferTooShort {
+            need: 8,
             have: body.len(),
-            what: "sgpd seig",
-        };
-        if body.len() < 8 {
-            return Err(Error::BufferTooShort {
-                need: 8,
-                have: body.len(),
-                what: "sgpd seig header",
-            });
-        }
-        let version = body[0];
-        let mut off = 4;
-        if &body[off..off + 4] != SEIG_GROUPING_TYPE {
-            return Ok(Vec::new());
-        }
+            what: "sgpd seig header",
+        });
+    }
+    let version = body[0];
+    let mut off = 4;
+    if &body[off..off + 4] != SEIG_GROUPING_TYPE {
+        return Ok(Vec::new());
+    }
+    off += 4;
+    let default_length = if version >= 1 {
+        let d = read_u32_at(body, off).ok_or_else(|| short(off + 4))? as usize;
         off += 4;
-        let default_length = if version >= 1 {
-            let d = read_u32_at(body, off).ok_or_else(|| short(off + 4))? as usize;
-            off += 4;
-            d
+        d
+    } else {
+        0
+    };
+    if version >= 2 {
+        off += 4;
+    }
+    let count = read_u32_at(body, off).ok_or_else(|| short(off + 4))? as usize;
+    off += 4;
+    // every entry occupies at least 4 bytes (or its length prefix)
+    let remaining = body.len().saturating_sub(off);
+    let min_entry = if default_length != 0 {
+        default_length
+    } else {
+        4
+    };
+    if count > remaining / min_entry {
+        return Err(short(off.saturating_add(count.saturating_mul(min_entry))));
+    }
+    let mut groups = Vec::with_capacity(count);
+    for _ in 0..count {
+        let (len, start) = if default_length != 0 {
+            (default_length, off)
         } else {
-            0
+            let dl = read_u32_at(body, off).ok_or_else(|| short(off + 4))? as usize;
+            (dl, off + 4)
         };
-        if version >= 2 {
-            off += 4;
-        }
-        let count = read_u32_at(body, off).ok_or_else(|| short(off + 4))? as usize;
-        off += 4;
-        // every entry occupies at least 4 bytes (or its length prefix)
-        let remaining = body.len().saturating_sub(off);
-        let min_entry = if default_length != 0 { default_length } else { 4 };
-        if count > remaining / min_entry {
-            return Err(short(off.saturating_add(count.saturating_mul(min_entry))));
-        }
-        let mut groups = Vec::with_capacity(count);
-        for _ in 0..count {
-            let (len, start) = if default_length != 0 {
-                (default_length, off)
-            } else {
-                let dl = read_u32_at(body, off).ok_or_else(|| short(off + 4))? as usize;
-                (dl, off + 4)
-            };
-            let end = start.checked_add(len).ok_or_else(|| short(usize::MAX))?;
-            let desc = body.get(start..end).ok_or_else(|| short(end))?;
-            groups.push(parse_seig_entry(desc, version)?);
-            off = end;
-        }
-        Ok(groups)
+        let end = start.checked_add(len).ok_or_else(|| short(usize::MAX))?;
+        let desc = body.get(start..end).ok_or_else(|| short(end))?;
+        groups.push(parse_seig_entry(desc, version)?);
+        off = end;
     }
+    Ok(groups)
+}
 
-    fn parse_seig_entry(b: &[u8], _sgpd_version: u8) -> Result<SeigGroup> {
-        if b.len() < 4 {
-            return Err(Error::BufferTooShort {
-                need: 4,
-                have: b.len(),
-                what: "seig entry header",
-            });
-        }
-        let is_protected = b[2] != 0;
-        let per_sample_iv_size = b[3];
-        if !is_protected {
-            return Ok(SeigGroup {
-                is_protected: false,
-                kid: None,
-            });
-        }
-        if b.len() < 20 {
-            return Err(Error::BufferTooShort {
-                need: 20,
-                have: b.len(),
-                what: "seig key_id",
-            });
-        }
-        let mut kid = [0u8; 16];
-        kid.copy_from_slice(&b[4..20]);
-        let _ = per_sample_iv_size;
-        Ok(SeigGroup {
-            is_protected: true,
-            kid: Some(kid),
-        })
+fn parse_seig_entry(b: &[u8], _sgpd_version: u8) -> Result<SeigGroup> {
+    if b.len() < 4 {
+        return Err(Error::BufferTooShort {
+            need: 4,
+            have: b.len(),
+            what: "seig entry header",
+        });
     }
+    let is_protected = b[2] != 0;
+    let per_sample_iv_size = b[3];
+    if !is_protected {
+        return Ok(SeigGroup {
+            is_protected: false,
+            kid: None,
+        });
+    }
+    if b.len() < 20 {
+        return Err(Error::BufferTooShort {
+            need: 20,
+            have: b.len(),
+            what: "seig key_id",
+        });
+    }
+    let mut kid = [0u8; 16];
+    kid.copy_from_slice(&b[4..20]);
+    let _ = per_sample_iv_size;
+    Ok(SeigGroup {
+        is_protected: true,
+        kid: Some(kid),
+    })
+}
 
-    fn parse_seig_sample_groups(body: &[u8], sample_count: usize) -> Result<Vec<u32>> {
-        let short = |need: usize| Error::BufferTooShort {
-            need,
+fn parse_seig_sample_groups(body: &[u8], sample_count: usize) -> Result<Vec<u32>> {
+    let short = |need: usize| Error::BufferTooShort {
+        need,
+        have: body.len(),
+        what: "sbgp seig",
+    };
+    if body.len() < 8 {
+        return Err(Error::BufferTooShort {
+            need: 8,
             have: body.len(),
-            what: "sbgp seig",
-        };
-        if body.len() < 8 {
-            return Err(Error::BufferTooShort {
-                need: 8,
-                have: body.len(),
-                what: "sbgp seig header",
-            });
-        }
-        let version = body[0];
-        let mut off = 4;
-        if &body[off..off + 4] != SEIG_GROUPING_TYPE {
-            return Ok(alloc::vec![0u32; sample_count.min(MAX_UNBACKED_COUNT)]);
-        }
+            what: "sbgp seig header",
+        });
+    }
+    let version = body[0];
+    let mut off = 4;
+    if &body[off..off + 4] != SEIG_GROUPING_TYPE {
+        return Ok(alloc::vec![0u32; sample_count.min(MAX_UNBACKED_COUNT)]);
+    }
+    off += 4;
+    let index_type = if version >= 1 {
+        let t = read_u32_at(body, off).ok_or_else(|| short(off + 4))?;
         off += 4;
-        let index_type = if version >= 1 {
-            let t = read_u32_at(body, off).ok_or_else(|| short(off + 4))?;
-            off += 4;
-            t
+        t
+    } else {
+        0
+    };
+    let count = read_u32_at(body, off).ok_or_else(|| short(off + 4))? as usize;
+    off += 4;
+    let wide = version >= 1 && index_type == 1;
+    let entry_len = 4 + if wide { 8 } else { 4 };
+    if count > body.len().saturating_sub(off) / entry_len {
+        return Err(short(off.saturating_add(count.saturating_mul(entry_len))));
+    }
+    let sample_count = sample_count.min(MAX_UNBACKED_COUNT);
+    let mut out = Vec::with_capacity(sample_count);
+    for _ in 0..count {
+        let sc = read_u32_at(body, off).ok_or_else(|| short(off + 4))? as usize;
+        off += 4;
+        let gdi = if wide {
+            let v = read_u64_at(body, off).ok_or_else(|| short(off + 8))?;
+            off += 8;
+            (v & 0xFFFF_FFFF) as u32
         } else {
-            0
-        };
-        let count = read_u32_at(body, off).ok_or_else(|| short(off + 4))? as usize;
-        off += 4;
-        let wide = version >= 1 && index_type == 1;
-        let entry_len = 4 + if wide { 8 } else { 4 };
-        if count > body.len().saturating_sub(off) / entry_len {
-            return Err(short(off.saturating_add(count.saturating_mul(entry_len))));
-        }
-        let sample_count = sample_count.min(MAX_UNBACKED_COUNT);
-        let mut out = Vec::with_capacity(sample_count);
-        for _ in 0..count {
-            let sc = read_u32_at(body, off).ok_or_else(|| short(off + 4))? as usize;
+            let v = read_u32_at(body, off).ok_or_else(|| short(off + 4))?;
             off += 4;
-            let gdi = if wide {
-                let v = read_u64_at(body, off).ok_or_else(|| short(off + 8))?;
-                off += 8;
-                (v & 0xFFFF_FFFF) as u32
-            } else {
-                let v = read_u32_at(body, off).ok_or_else(|| short(off + 4))?;
-                off += 4;
-                v
-            };
-            // never grow past the samples that exist
-            let room = sample_count.saturating_sub(out.len());
-            out.extend(core::iter::repeat_n(gdi & 0xFFFF, sc.min(room)));
-        }
-        out.resize(sample_count, 0);
-        Ok(out)
+            v
+        };
+        // never grow past the samples that exist
+        let room = sample_count.saturating_sub(out.len());
+        out.extend(core::iter::repeat_n(gdi & 0xFFFF, sc.min(room)));
     }
+    out.resize(sample_count, 0);
+    Ok(out)
+}
 
-    fn parse_seig_from_stbl(stbl: &[u8]) -> Option<SeigData> {
-        let sgpd = find_box(stbl, b"sgpd")?;
-        let body = &sgpd[BOX_HEADER_MIN_SIZE..];
-        if body.len() < 8 || &body[4..8] != SEIG_GROUPING_TYPE {
-            return None;
-        }
-        parse_seig_groups(body).ok().map(|groups| SeigData { groups })
+fn parse_seig_from_stbl(stbl: &[u8]) -> Option<SeigData> {
+    let sgpd = find_box(stbl, b"sgpd")?;
+    let body = &sgpd[BOX_HEADER_MIN_SIZE..];
+    if body.len() < 8 || &body[4..8] != SEIG_GROUPING_TYPE {
+        return None;
     }
+    parse_seig_groups(body)
+        .ok()
+        .map(|groups| SeigData { groups })
+}
 
-    pub(crate) struct AuxSource<'a> {
-        pub(crate) data: &'a [u8],
-        pub(crate) data_base_offset: u64,
-        pub(crate) moof_file_offset: u64,
-    }
+pub(crate) struct AuxSource<'a> {
+    pub(crate) data: &'a [u8],
+    pub(crate) data_base_offset: u64,
+    pub(crate) moof_file_offset: u64,
+}
 
-    fn harvest_fragment_senc(
-        file: &[u8],
-        tracks: &mut [TrackCrypto],
-        trex_defaults: &BTreeMap<u32, TrexDefaults>,
-        aux: Option<&AuxSource<'_>>,
-    ) -> Result<()> {
+fn harvest_fragment_senc(
+    file: &[u8],
+    tracks: &mut [TrackCrypto],
+    trex_defaults: &BTreeMap<u32, TrexDefaults>,
+    aux: Option<&AuxSource<'_>>,
+) -> Result<()> {
     for moof in iter_top_boxes(file, b"moof") {
         let moof_off = match aux {
             Some(a) => a.moof_file_offset as usize,
@@ -930,9 +935,7 @@ fn parse_one_aux_entry(aux: &[u8], per_sample_iv_size: u8) -> Option<SampleEncry
                 });
             }
             let tfhd_parsed = TrackFragmentHeaderBox::parse_body(&tfhd[BOX_HEADER_MIN_SIZE..])?;
-            let saio_base_offset = tfhd_parsed
-                .base_data_offset
-                .unwrap_or(moof_off as u64);
+            let saio_base_offset = tfhd_parsed.base_data_offset.unwrap_or(moof_off as u64);
 
             let Some(crypto) = tracks
                 .iter_mut()
@@ -991,10 +994,9 @@ fn parse_one_aux_entry(aux: &[u8], per_sample_iv_size: u8) -> Option<SampleEncry
                     }
                     None => {
                         let (resolve_file, resolve_base): (&[u8], u64) = match aux {
-                            Some(a) => (
-                                a.data,
-                                saio_base_offset.saturating_sub(a.data_base_offset),
-                            ),
+                            Some(a) => {
+                                (a.data, saio_base_offset.saturating_sub(a.data_base_offset))
+                            }
                             None => (file, saio_base_offset),
                         };
                         let has_saiz_saio =
@@ -1095,12 +1097,14 @@ fn find_sinf_in_stsd_indexed(stsd: &[u8]) -> Option<(&[u8], u32)> {
     }
     for (i, entry) in iter_boxes(&stsd[body_start..]).enumerate() {
         let ty = &entry[4..8];
-        if ty == b"encv" || ty == b"enca" {
-            let child_start = if ty == b"encv" {
-                BOX_HEADER_MIN_SIZE + VISUAL_SAMPLE_ENTRY_HDR
-            } else {
-                BOX_HEADER_MIN_SIZE + 28
+        if matches!(ty, b"encv" | b"enca" | b"encs" | b"enct") {
+            let child_start = match ty {
+                b"encv" => BOX_HEADER_MIN_SIZE + VISUAL_SAMPLE_ENTRY_HDR,
+                b"enca" => BOX_HEADER_MIN_SIZE + 28,
+                b"encs" | b"enct" => BOX_HEADER_MIN_SIZE + 8,
+                _ => 0,
             };
+            let mut found: Option<&[u8]> = None;
             if child_start <= entry.len() {
                 let mut fallback: Option<&[u8]> = None;
                 for sinf in iter_boxes(&entry[child_start..]).filter(|b| &b[4..8] == b"sinf") {
@@ -1112,14 +1116,35 @@ fn find_sinf_in_stsd_indexed(stsd: &[u8]) -> Option<(&[u8], u32)> {
                         .and_then(|p| p.scheme_type)
                         .is_some_and(|s| CencScheme::from_four_cc(&s.scheme_type).is_some());
                     if recognized {
-                        return Some((sinf, (i + 1) as u32));
+                        found = Some(sinf);
+                        break;
                     }
                 }
-                if let Some(sinf) = fallback {
-                    return Some((sinf, (i + 1) as u32));
+                if found.is_none() {
+                    found = fallback;
                 }
             }
+            if found.is_none() {
+                found = scan_for_sinf(entry, BOX_HEADER_MIN_SIZE + 8);
+            }
+            if let Some(sinf) = found {
+                return Some((sinf, (i + 1) as u32));
+            }
         }
+    }
+    None
+}
+
+fn scan_for_sinf(entry: &[u8], from: usize) -> Option<&[u8]> {
+    let mut off = from;
+    while off + BOX_HEADER_MIN_SIZE <= entry.len() {
+        if &entry[off + 4..off + 8] == b"sinf" {
+            let size = u32::from_be_bytes(entry[off..off + 4].try_into().ok()?) as usize;
+            if size >= BOX_HEADER_MIN_SIZE && off + size <= entry.len() {
+                return Some(&entry[off..off + size]);
+            }
+        }
+        off += 1;
     }
     None
 }
@@ -1131,7 +1156,7 @@ fn protected_stsd_index_list(stsd: &[u8]) -> alloc::vec::Vec<u32> {
     }
     iter_boxes(&stsd[body_start..])
         .enumerate()
-        .filter(|(_, entry)| &entry[4..8] == b"encv" || &entry[4..8] == b"enca")
+        .filter(|(_, entry)| matches!(&entry[4..8], b"encv" | b"enca" | b"encs" | b"enct"))
         .map(|(i, _)| (i + 1) as u32)
         .collect()
 }
@@ -1173,8 +1198,9 @@ fn protected_track_spec(trak: &[u8], movie_timescale: u32) -> Result<Option<Prot
         return Ok(None);
     };
     let sinf_parsed = crate::cenc::ProtectionSchemeInfoBox::parse(sinf)?;
-    let codec_config = match &sinf_parsed.original_format.data_format {
-        b"avc1" => {
+    let original_format = sinf_parsed.original_format.data_format;
+    let codec_config = match &original_format {
+        b"avc1" | b"avc2" | b"avc3" | b"avc4" | b"dvav" | b"dva1" => {
             let (avc_config, entry_width, entry_height) = find_avcc_config(stsd)?;
             let (width, height) = if entry_width != 0 && entry_height != 0 {
                 (entry_width, entry_height)
@@ -1187,9 +1213,11 @@ fn protected_track_spec(trak: &[u8], movie_timescale: u32) -> Result<Option<Prot
                 config: AVCConfigurationBox::new(avc_config),
                 width,
                 height,
+                codec_fourcc: original_format,
+                extra_boxes: Vec::new(),
             }
         }
-        b"hvc1" | b"hev1" | b"dvhe" | b"dvh1" => {
+        b"hvc1" | b"hev1" | b"hvc2" | b"hev2" | b"dvhe" | b"dvh1" => {
             let (hevc_config, entry_width, entry_height) = find_hvcc_config(stsd)?;
             let (width, height) = if entry_width != 0 && entry_height != 0 {
                 (entry_width, entry_height)
@@ -1202,11 +1230,13 @@ fn protected_track_spec(trak: &[u8], movie_timescale: u32) -> Result<Option<Prot
                 config: HEVCConfigurationBox::new(hevc_config),
                 width,
                 height,
+                codec_fourcc: original_format,
+                extra_boxes: Vec::new(),
             }
         }
-        b"av01" => {
+        b"av01" | b"dav1" => {
             let entry = find_protected_entry(stsd, b"encv").ok_or(Error::UnexpectedBox {
-                expected: "encv entry for av01 original_format",
+                expected: "encv entry for av01/dav1 original_format",
             })?;
             let av1 = crate::av1::Av1SampleEntry::parse_entry(entry)?;
             let (width, height) = if av1.visual.width != 0 && av1.visual.height != 0 {
@@ -1365,21 +1395,24 @@ fn protected_track_spec(trak: &[u8], movie_timescale: u32) -> Result<Option<Prot
                 sample_size: ec3.samplesize,
             }
         }
-        b"dtsc" | b"dtsh" | b"dtsl" | b"dtse" => {
+        b"dtsc" | b"dtsh" | b"dtsl" | b"dtse" | b"dtsx" | b"dtsy" => {
             let entry = find_protected_entry(stsd, b"enca").ok_or(Error::UnexpectedBox {
-                expected: "enca entry for dtsc/dtsh/dtsl/dtse original_format",
+                expected: "enca entry for DTS original_format",
             })?;
             let dts = crate::init_segment::DtsSampleEntry::parse(entry)?;
-            let config = crate::dts::DtsSpecificBox::parse(crate::media::config_box_body(
-                &dts.config_boxes,
-                b"ddts",
-            )?)?;
-            CodecConfig::Dts {
-                config,
-                codec_fourcc: sinf_parsed.original_format.data_format,
-                channel_count: dts.channelcount,
-                sample_rate: dts.samplerate >> 16,
-                sample_size: dts.samplesize,
+            let ddts_body = crate::media::config_box_body(&dts.config_boxes, b"ddts")
+                .or_else(|_| crate::media::config_box_body(&dts.config_boxes, b"udts"));
+            match ddts_body.and_then(crate::dts::DtsSpecificBox::parse) {
+                Ok(config) => CodecConfig::Dts {
+                    config,
+                    codec_fourcc: original_format,
+                    channel_count: dts.channelcount,
+                    sample_rate: dts.samplerate >> 16,
+                    sample_size: dts.samplesize,
+                },
+                Err(_) => {
+                    return Ok(None);
+                }
             }
         }
         b"mha1" | b"mha2" | b"mhm1" | b"mhm2" => {
@@ -1413,13 +1446,52 @@ fn protected_track_spec(trak: &[u8], movie_timescale: u32) -> Result<Option<Prot
                 sample_size: ac4.samplesize,
             }
         }
+        b"mlpa" => {
+            let entry = find_protected_entry(stsd, b"enca").ok_or(Error::UnexpectedBox {
+                expected: "enca entry for mlpa original_format",
+            })?;
+            let mlpa = parse_audio_entry_params(entry)?;
+            let config = crate::codec::mlp::MlpSpecificBox::parse(crate::media::config_box_body(
+                &mlpa.3, b"dmlp",
+            )?)?;
+            CodecConfig::TrueHd {
+                config,
+                channel_count: mlpa.0,
+                sample_rate: mlpa.1,
+                sample_size: mlpa.2,
+            }
+        }
+        b"vorb" | b"vor1" => {
+            let entry = find_protected_entry(stsd, b"enca").ok_or(Error::UnexpectedBox {
+                expected: "enca entry for vorb original_format",
+            })?;
+            let vorb = parse_audio_entry_params(entry)?;
+            let esds = crate::mp4esds::EsdsBox::parse_body(crate::media::config_box_body(
+                &vorb.3, b"esds",
+            )?)?;
+            let codec_private = esds
+                .es_descriptor
+                .decoder_config
+                .and_then(|dc| dc.decoder_specific_info)
+                .map(|dsi| dsi.data)
+                .unwrap_or_default();
+            CodecConfig::Vorbis {
+                codec_private,
+                channels: vorb.0,
+                sample_rate: vorb.1,
+            }
+        }
+        b"stpp" => CodecConfig::Subtitle {
+            format: crate::ir::SubtitleFormat::Ttml,
+        },
+        b"wvtt" => CodecConfig::Subtitle {
+            format: crate::ir::SubtitleFormat::WebVtt,
+        },
+        b"c608" => CodecConfig::Subtitle {
+            format: crate::ir::SubtitleFormat::Cea608,
+        },
         _ => {
-            return Err(Error::UnexpectedBox {
-                expected: "avc1/hvc1/hev1/av01/vp09/vvc1/vvi1/mp4v/mp4a/Opus/fLaC/ac-3/ec-3/\
-                           dtsc/dtsh/dtsl/dtse/mha1/mha2/mhm1/mhm2/ac-4 original_format \
-                           (protected AVC/HEVC/AV1/VP9/VVC/MPEG-2 video or AAC/Opus/FLAC/AC-3/\
-                           E-AC-3/DTS/MPEG-H/AC-4 audio)",
-            });
+            return Ok(None);
         }
     };
 
@@ -1504,7 +1576,8 @@ fn patch_traf_data_offsets(traf: &mut [u8], moof_delta: i64, bytes_removed_befor
             continue;
         }
         let box_type = &traf[abs + 4..abs + 8];
-        if box_type == b"tfhd" && fullbox_flags(&traf[abs..]).is_some_and(|f| f & TFHD_BASE_DATA_OFFSET_PRESENT != 0)
+        if box_type == b"tfhd"
+            && fullbox_flags(&traf[abs..]).is_some_and(|f| f & TFHD_BASE_DATA_OFFSET_PRESENT != 0)
         {
             let f = abs + BOX_HEADER_MIN_SIZE + FULL_HDR + 4;
             if traf.len() >= f + 8 {
@@ -1512,7 +1585,8 @@ fn patch_traf_data_offsets(traf: &mut [u8], moof_delta: i64, bytes_removed_befor
                 let new = (old as i64 - bytes_removed_before - moof_delta).max(0) as u64;
                 traf[f..f + 8].copy_from_slice(&new.to_be_bytes());
             }
-        } else if box_type == b"trun" && fullbox_flags(&traf[abs..]).is_some_and(|f| f & TRUN_DATA_OFFSET_PRESENT != 0)
+        } else if box_type == b"trun"
+            && fullbox_flags(&traf[abs..]).is_some_and(|f| f & TRUN_DATA_OFFSET_PRESENT != 0)
         {
             let f = abs + BOX_HEADER_MIN_SIZE + FULL_HDR + 4;
             if traf.len() >= f + 4 {
@@ -1524,7 +1598,10 @@ fn patch_traf_data_offsets(traf: &mut [u8], moof_delta: i64, bytes_removed_befor
 }
 
 #[cfg(feature = "cli")]
-pub(crate) fn strip_sample_encryption_boxes(moof_bytes: &[u8], bytes_removed_before: u64) -> (Vec<u8>, u64) {
+pub(crate) fn strip_sample_encryption_boxes(
+    moof_bytes: &[u8],
+    bytes_removed_before: u64,
+) -> (Vec<u8>, u64) {
     let body = &moof_bytes[BOX_HEADER_MIN_SIZE.min(moof_bytes.len())..];
     let mut children: Vec<Vec<u8>> = Vec::new();
     for child in iter_boxes(body) {
@@ -1589,7 +1666,10 @@ pub(crate) fn harvest_moov_residual_protection(moov_bytes: &[u8]) -> BTreeMap<u3
         let Some(stsd) = descend(trak, &[b"mdia", b"minf", b"stbl", b"stsd"]) else {
             continue;
         };
-        out.insert(parsed_tkhd.track_id, stsd_has_residual_protection_markers(stsd));
+        out.insert(
+            parsed_tkhd.track_id,
+            stsd_has_residual_protection_markers(stsd),
+        );
     }
     out
 }
@@ -1624,9 +1704,7 @@ fn demux_protected(file: &[u8]) -> Result<Media> {
 
             let durations: Vec<u32> = find_box(stbl, b"stts")
                 .and_then(|s| crate::timing::TimeToSampleBox::parse(s).ok())
-                .map(|stts| {
-                    crate::container::progressive_demux::expand_stts(&stts, sizes.len())
-                })
+                .map(|stts| crate::container::progressive_demux::expand_stts(&stts, sizes.len()))
                 .transpose()?
                 .unwrap_or_else(|| vec![0u32; sizes.len()]);
 
@@ -1750,9 +1828,7 @@ pub(crate) fn harvest_trex_defaults(moov: &[u8]) -> BTreeMap<u32, TrexDefaults> 
         out.insert(
             track_id,
             TrexDefaults {
-                sample_duration: Some(u32::from_be_bytes([
-                    trex[20], trex[21], trex[22], trex[23],
-                ])),
+                sample_duration: Some(u32::from_be_bytes([trex[20], trex[21], trex[22], trex[23]])),
                 sample_size: Some(u32::from_be_bytes([trex[24], trex[25], trex[26], trex[27]])),
                 sample_flags: Some(u32::from_be_bytes([trex[28], trex[29], trex[30], trex[31]])),
                 default_sample_description_index: Some(u32::from_be_bytes([
@@ -1860,7 +1936,7 @@ fn absorb_protected_fragment(
     Ok(())
 }
 
-#[cfg(feature = "cli")]
+#[cfg(any(test, feature = "cli"))]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FragmentSampleLayout {
     pub(crate) file_offset: u64,
@@ -1871,7 +1947,7 @@ pub(crate) struct FragmentSampleLayout {
     pub(crate) is_sync: bool,
 }
 
-#[cfg(feature = "cli")]
+#[cfg(any(test, feature = "cli"))]
 pub(crate) fn fragment_sample_layout(
     moof_off: u64,
     moof: &MovieFragmentBox,
@@ -2059,6 +2135,41 @@ fn find_esds_config(stsd: &[u8]) -> Result<(crate::mp4esds::EsdsBox, u16, u32, u
     })
 }
 
+fn parse_audio_entry_params(
+    entry: &[u8],
+) -> Result<(
+    u16,
+    u32,
+    u16,
+    alloc::vec::Vec<crate::init_segment::OpaqueBox>,
+)> {
+    const AUDIO_SAMPLE_ENTRY_HDR: usize = 28;
+    let fixed_start = BOX_HEADER_MIN_SIZE;
+    let child_start = fixed_start + AUDIO_SAMPLE_ENTRY_HDR;
+    if child_start > entry.len() {
+        return Err(Error::UnexpectedBox {
+            expected: "audio sample entry",
+        });
+    }
+    let channel_count = u16::from_be_bytes([entry[fixed_start + 16], entry[fixed_start + 17]]);
+    let sample_size = u16::from_be_bytes([entry[fixed_start + 18], entry[fixed_start + 19]]);
+    let sample_rate = u32::from_be_bytes([
+        entry[fixed_start + 24],
+        entry[fixed_start + 25],
+        entry[fixed_start + 26],
+        entry[fixed_start + 27],
+    ]) >> 16;
+    let mut config_boxes = alloc::vec::Vec::new();
+    for b in iter_boxes(&entry[child_start..]) {
+        let ty = [b[4], b[5], b[6], b[7]];
+        config_boxes.push(crate::init_segment::OpaqueBox::new(
+            ty,
+            b[BOX_HEADER_MIN_SIZE..].to_vec(),
+        ));
+    }
+    Ok((channel_count, sample_rate, sample_size, config_boxes))
+}
+
 fn iter_boxes(data: &[u8]) -> impl Iterator<Item = &[u8]> {
     let mut offset = 0usize;
     core::iter::from_fn(move || {
@@ -2229,7 +2340,9 @@ fn stsz_sizes(stbl: &[u8]) -> Result<Vec<usize>> {
     let mut sizes;
     if sample_size != 0 {
         if count > MAX_UNBACKED_COUNT {
-            return Err(Error::InvalidInput("stsz sample_count is implausibly large"));
+            return Err(Error::InvalidInput(
+                "stsz sample_count is implausibly large",
+            ));
         }
         sizes = alloc::vec![sample_size as usize; count];
     } else {
@@ -2352,13 +2465,14 @@ mod fragment_default_chain_tests {
     use crate::box_types::{BOX_HEADER_MIN_SIZE, parse_box};
     use crate::cenc::{CencScheme, TrackEncryptionBox};
     use crate::crypto::cenc_decrypt::{
-        fragment_sample_layout, harvest_fragment_senc, resolve_trun_sample, AuxSource, SeigData,
-        SeigGroup, TrackCrypto, TrexDefaults,
+        AuxSource, SeigData, SeigGroup, TrackCrypto, TrexDefaults, fragment_sample_layout,
+        harvest_fragment_senc, resolve_trun_sample,
     };
     use crate::movie_fragment::{
-        MovieFragmentBox, TrackFragmentHeaderBox, TrackFragmentRunBox, TRUN_DATA_OFFSET_PRESENT,
-        TRUN_FIRST_SAMPLE_FLAGS_PRESENT, TRUN_SAMPLE_COMPOSITION_TIME_OFFSET_PRESENT,
-        TRUN_SAMPLE_DURATION_PRESENT, TRUN_SAMPLE_FLAGS_PRESENT, TRUN_SAMPLE_SIZE_PRESENT,
+        MovieFragmentBox, TRUN_DATA_OFFSET_PRESENT, TRUN_FIRST_SAMPLE_FLAGS_PRESENT,
+        TRUN_SAMPLE_COMPOSITION_TIME_OFFSET_PRESENT, TRUN_SAMPLE_DURATION_PRESENT,
+        TRUN_SAMPLE_FLAGS_PRESENT, TRUN_SAMPLE_SIZE_PRESENT, TrackFragmentHeaderBox,
+        TrackFragmentRunBox,
     };
 
     const SAMPLE_FLAG_IS_NON_SYNC: u32 = 0x0001_0000;
@@ -2525,10 +2639,15 @@ mod fragment_default_chain_tests {
         );
         let saiz = make_saiz(16, 1);
         let saio_placeholder = make_saio_v0(&[0]);
-        let moof_len = make_moof(&[tfhd.clone(), trun.clone(), saiz.clone(), saio_placeholder]).len();
+        let moof_len =
+            make_moof(&[tfhd.clone(), trun.clone(), saiz.clone(), saio_placeholder]).len();
         let saio = make_saio_v0(&[moof_len as u32]);
         let moof = make_moof(&[tfhd, trun, saiz, saio]);
-        assert_eq!(moof.len(), moof_len, "saio offset value must not change box sizes");
+        assert_eq!(
+            moof.len(),
+            moof_len,
+            "saio offset value must not change box sizes"
+        );
 
         let real_iv = [0xABu8; 16];
         let mut full_file = moof.clone();
@@ -2755,9 +2874,19 @@ mod fragment_default_chain_tests {
         let trex = BTreeMap::new();
         harvest_fragment_senc(&moof, &mut tracks, &trex, None).unwrap();
         let samples = &tracks[0].samples;
-        assert!(!samples[0].is_encrypted, "clear-lead group must mark sample 0 clear");
-        assert!(samples[1].is_encrypted, "protected group must mark sample 1 encrypted");
-        assert_eq!(samples[1].explicit_kid, Some(kid3), "group kid must carry onto sample 1");
+        assert!(
+            !samples[0].is_encrypted,
+            "clear-lead group must mark sample 0 clear"
+        );
+        assert!(
+            samples[1].is_encrypted,
+            "protected group must mark sample 1 encrypted"
+        );
+        assert_eq!(
+            samples[1].explicit_kid,
+            Some(kid3),
+            "group kid must carry onto sample 1"
+        );
     }
 
     #[test]
@@ -2814,7 +2943,10 @@ mod hardening_tests {
         let dbg = format!("{map:?} {map:#?}");
         assert!(dbg.contains("KeyMap"));
         assert!(dbg.contains(&"11".repeat(16)), "KIDs may be listed");
-        assert!(!dbg.to_lowercase().contains("a7"), "key bytes leaked: {dbg}");
+        assert!(
+            !dbg.to_lowercase().contains("a7"),
+            "key bytes leaked: {dbg}"
+        );
         assert!(!dbg.contains("167"), "key bytes leaked as decimal: {dbg}");
         assert_eq!(map.get(&kid), Some(&key));
     }

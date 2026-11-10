@@ -5,8 +5,12 @@ use std::process::{Command, Stdio};
 
 fn ffmpeg_raw_format(cfg: &crate::CodecConfig) -> Option<(&'static str, u8)> {
     match cfg {
-        crate::CodecConfig::Avc { config, .. } => Some(("h264", config.config.length_size_minus_one + 1)),
-        crate::CodecConfig::Hevc { config, .. } => Some(("hevc", config.config.length_size_minus_one + 1)),
+        crate::CodecConfig::Avc { config, .. } => {
+            Some(("h264", config.config.length_size_minus_one + 1))
+        }
+        crate::CodecConfig::Hevc { config, .. } => {
+            Some(("hevc", config.config.length_size_minus_one + 1))
+        }
         _ => None,
     }
 }
@@ -191,7 +195,11 @@ fn check_aac(
     if wrapped == 0 {
         return Ok(None);
     }
-    run_ffmpeg_on_stdin(&["-f", "aac", "-i", "-", "-f", "null", "-"], adts, ffmpeg_path)
+    run_ffmpeg_on_stdin(
+        &["-f", "aac", "-i", "-", "-f", "null", "-"],
+        adts,
+        ffmpeg_path,
+    )
 }
 
 /// How many consecutive samples `check_samples` wants for this codec.
@@ -199,6 +207,7 @@ pub(crate) fn wanted_samples(cfg: &crate::CodecConfig) -> usize {
     match cfg {
         crate::CodecConfig::Ac3 { .. } | crate::CodecConfig::Eac3 { .. } => 4,
         crate::CodecConfig::Aac { .. } => 8,
+        crate::CodecConfig::Avc { .. } => 4,
         crate::CodecConfig::Hevc { .. } => 25,
         _ => 1,
     }
@@ -240,7 +249,11 @@ pub(crate) fn check_samples(
     if annexb.len() == params_len {
         return Ok(None);
     }
-    run_ffmpeg_on_stdin(&["-f", ffmpeg_fmt, "-i", "-", "-f", "null", "-"], annexb, ffmpeg_path)
+    run_ffmpeg_on_stdin(
+        &["-f", ffmpeg_fmt, "-i", "-", "-f", "null", "-"],
+        annexb,
+        ffmpeg_path,
+    )
 }
 
 #[cfg(test)]

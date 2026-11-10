@@ -99,7 +99,6 @@ bitforge::impl_spec_display!(OutputFormat);
     disable_version_flag = true
 )]
 pub struct Args {
-
     #[arg(short = 'h', long = "help", action = clap::ArgAction::Help, hide = true)]
     pub help: Option<bool>,
 
@@ -185,11 +184,21 @@ pub struct Args {
     pub tfdt_base: Option<u64>,
 
     /// Output container format
-    #[arg(short = 'f', long = "format", value_enum, help_heading = "Input/Output")]
+    #[arg(
+        short = 'f',
+        long = "format",
+        value_enum,
+        help_heading = "Input/Output"
+    )]
     pub format: Option<FormatArg>,
 
     /// Comma-separated track IDs to keep (default: all)
-    #[arg(long = "tracks", value_name = "IDS", value_delimiter = ',', help_heading = "Input/Output")]
+    #[arg(
+        long = "tracks",
+        value_name = "IDS",
+        value_delimiter = ',',
+        help_heading = "Input/Output"
+    )]
     pub tracks: Vec<u32>,
 
     /// Print per-track metadata and exit (-j for pretty JSON)
@@ -199,7 +208,13 @@ pub struct Args {
 
     /// With `-d`/`--dump`: emit the metadata as pretty-printed JSON
     #[cfg(feature = "cenc")]
-    #[arg(short = 'j', long = "json", requires = "dump", hide = true, help_heading = "Inspect")]
+    #[arg(
+        short = 'j',
+        long = "json",
+        requires = "dump",
+        hide = true,
+        help_heading = "Inspect"
+    )]
     pub json: bool,
 
     /// Extract a WebVTT-in-fMP4 (wvtt) subtitle track to a plain .vtt text
@@ -216,12 +231,20 @@ pub struct Args {
 
     /// Decrypt a bare fragment against this init segment's moov
     #[cfg(feature = "cenc")]
-    #[arg(long = "fragments-info", value_name = "INIT_PATH", help_heading = "CENC decrypt")]
+    #[arg(
+        long = "fragments-info",
+        value_name = "INIT_PATH",
+        help_heading = "CENC decrypt"
+    )]
     pub fragments_info: Option<PathBuf>,
 
     /// ffmpeg binary for the post-decrypt key-sanity check
     #[cfg(feature = "cenc")]
-    #[arg(long = "ffmpeg-path", value_name = "PATH", help_heading = "CENC decrypt")]
+    #[arg(
+        long = "ffmpeg-path",
+        value_name = "PATH",
+        help_heading = "CENC decrypt"
+    )]
     pub ffmpeg_path: Option<PathBuf>,
 
     /// Run the key-sanity check on this --fragments-info job (off there by default)
@@ -237,11 +260,7 @@ pub struct Args {
 
     /// Writer-thread output buffer size, in KB (default: 64)
     #[cfg(feature = "cenc")]
-    #[arg(
-        long = "writer-buf-kb",
-        value_name = "KB",
-        help_heading = "Tuning"
-    )]
+    #[arg(long = "writer-buf-kb", value_name = "KB", help_heading = "Tuning")]
     pub writer_buf_kb: Option<u32>,
 
     /// Byte threshold (in KB) above which a decrypt run is split across
@@ -256,11 +275,7 @@ pub struct Args {
 
     /// Overlapped-read queue depth for the Windows IOCP read path (default: 8)
     #[cfg(feature = "cenc")]
-    #[arg(
-        long = "io-depth",
-        value_name = "N",
-        help_heading = "Tuning"
-    )]
+    #[arg(long = "io-depth", value_name = "N", help_heading = "Tuning")]
     pub io_depth: Option<u32>,
 
     /// Disable the [profile] timing/per-track diagnostics (on by default).
@@ -276,14 +291,22 @@ pub struct Args {
 
     /// Whole-file HLS AES-128-CBC decrypt (bypasses CENC/MP4)
     #[cfg(feature = "sample-aes")]
-    #[arg(long = "aes128", requires = "keys", help_heading = "Raw HLS decrypt (bypasses CENC)")]
+    #[arg(
+        long = "aes128",
+        requires = "keys",
+        help_heading = "Raw HLS decrypt (bypasses CENC)"
+    )]
     pub aes128: bool,
 
     /// EXPERIMENTAL: in-place decrypt for a protected MPEG-TS (auto-detects
     /// between HLS SAMPLE-AES [H.264/AAC only] and a second unrelated raw-.ts
     /// scheme with its own in-stream IV). Pair with --key <IV_or_KID>:<KEY>
     #[cfg(feature = "sample-aes")]
-    #[arg(long = "sample-aes-ts", requires = "keys", help_heading = "Raw HLS decrypt (bypasses CENC)")]
+    #[arg(
+        long = "sample-aes-ts",
+        requires = "keys",
+        help_heading = "Raw HLS decrypt (bypasses CENC)"
+    )]
     pub sample_aes_ts: bool,
 }
 
@@ -311,10 +334,7 @@ pub enum CliError {
     NoTracksSelected,
     BadKey(String),
     UnsupportedSampleAes,
-    KeySanityCheckFailed {
-        track_id: u32,
-        detail: String,
-    },
+    KeySanityCheckFailed { track_id: u32, detail: String },
 }
 
 impl fmt::Display for CliError {
@@ -336,7 +356,10 @@ impl fmt::Display for CliError {
             }
             CliError::BadKey(reason) => {
                 // `reason` is a fixed description; it must never carry the key material.
-                write!(f, "invalid --key: {reason} (expected <32-hex-KID>:<32-hex-key>)")
+                write!(
+                    f,
+                    "invalid --key: {reason} (expected <32-hex-KID>:<32-hex-key>)"
+                )
             }
             CliError::UnsupportedSampleAes => write!(
                 f,
@@ -372,7 +395,8 @@ impl From<crate::Error> for CliError {
 pub type CliResult<T> = Result<T, CliError>;
 
 pub fn detect_container(data: &[u8]) -> CliResult<Container> {
-    if data.len() >= EBML_HEADER_MAGIC.len() && data[..EBML_HEADER_MAGIC.len()] == EBML_HEADER_MAGIC {
+    if data.len() >= EBML_HEADER_MAGIC.len() && data[..EBML_HEADER_MAGIC.len()] == EBML_HEADER_MAGIC
+    {
         return Ok(Container::Webm);
     }
     if data.len() >= BOX_FOURCC_OFFSET + 4 {
@@ -547,7 +571,9 @@ fn decrypt_run_maybe_parallel(
         .try_fold(0usize, |acc, &s| acc.checked_add(s))
         .ok_or_else(|| invalid("sample sizes overflow"))?;
     if total > buf.len() || entries.len() < sizes.len() {
-        return Err(invalid("sample layout does not match the data/crypto entries"));
+        return Err(invalid(
+            "sample layout does not match the data/crypto entries",
+        ));
     }
     let n_threads = std::thread::available_parallelism()
         .map(|n| n.get())
@@ -758,7 +784,8 @@ pub fn run_daemon() -> std::process::ExitCode {
             Ok(job) => {
                 if let Some(scan_path) = job.scan {
                     let t0 = std::time::Instant::now();
-                    match catch_unwind(AssertUnwindSafe(|| scan::scan_chunk(Path::new(&scan_path)))) {
+                    match catch_unwind(AssertUnwindSafe(|| scan::scan_chunk(Path::new(&scan_path))))
+                    {
                         Ok(Ok((tracks, scan_cut))) => DaemonResult {
                             ok: true,
                             error: None,
@@ -791,53 +818,53 @@ pub fn run_daemon() -> std::process::ExitCode {
                                 in_positional: None,
                                 input: Some(PathBuf::from(&input)),
                                 output: Some(PathBuf::from(&output)),
-                        dump: false,
-                        json: false,
-                        extract_text: false,
-                        format: Some(FormatArg::Progressive),
-                    tracks: Vec::new(),
-                    keys: job.keys,
-                    fragments_info: job.fragments_info.as_ref().map(PathBuf::from),
-                    ffmpeg_path: job.ffmpeg_path.as_ref().map(PathBuf::from),
-                    key_sanity_check: job.key_sanity,
-                    skip_key_sanity_check: false,
-                    writer_buf_kb: None,
-                    parallel_decrypt_min_kb: None,
-                    io_depth: None,
-                    no_profile: false,
-                    chunks: None,
-                    in_place: false,
-                    tfdt_rebase: false,
-                    tfdt_base: job.tfdt_base,
-                    daemon: false,
-                    #[cfg(feature = "sample-aes")]
-                    aes128: false,
-                    #[cfg(feature = "sample-aes")]
-                    sample_aes_ts: false,
-                };
-                match catch_unwind(AssertUnwindSafe(|| run(args))) {
-                    Ok(Ok(_)) => DaemonResult {
-                        ok: true,
-                        error: None,
-                        elapsed_ms: Some(t0.elapsed().as_millis() as u64),
-                        tracks: None,
-                        scan_cut: None,
-                    },
-                    Ok(Err(e)) => DaemonResult {
-                        ok: false,
-                        error: Some(e.to_string()),
-                        elapsed_ms: Some(t0.elapsed().as_millis() as u64),
-                        tracks: None,
-                        scan_cut: None,
-                    },
-                    Err(_) => DaemonResult {
-                        ok: false,
-                        error: Some("panic during decrypt (job aborted)".to_string()),
-                        elapsed_ms: None,
-                        tracks: None,
-                        scan_cut: None,
-                    },
-                }
+                                dump: false,
+                                json: false,
+                                extract_text: false,
+                                format: Some(FormatArg::Progressive),
+                                tracks: Vec::new(),
+                                keys: job.keys,
+                                fragments_info: job.fragments_info.as_ref().map(PathBuf::from),
+                                ffmpeg_path: job.ffmpeg_path.as_ref().map(PathBuf::from),
+                                key_sanity_check: job.key_sanity,
+                                skip_key_sanity_check: false,
+                                writer_buf_kb: None,
+                                parallel_decrypt_min_kb: None,
+                                io_depth: None,
+                                no_profile: false,
+                                chunks: None,
+                                in_place: false,
+                                tfdt_rebase: false,
+                                tfdt_base: job.tfdt_base,
+                                daemon: false,
+                                #[cfg(feature = "sample-aes")]
+                                aes128: false,
+                                #[cfg(feature = "sample-aes")]
+                                sample_aes_ts: false,
+                            };
+                            match catch_unwind(AssertUnwindSafe(|| run(args))) {
+                                Ok(Ok(_)) => DaemonResult {
+                                    ok: true,
+                                    error: None,
+                                    elapsed_ms: Some(t0.elapsed().as_millis() as u64),
+                                    tracks: None,
+                                    scan_cut: None,
+                                },
+                                Ok(Err(e)) => DaemonResult {
+                                    ok: false,
+                                    error: Some(e.to_string()),
+                                    elapsed_ms: Some(t0.elapsed().as_millis() as u64),
+                                    tracks: None,
+                                    scan_cut: None,
+                                },
+                                Err(_) => DaemonResult {
+                                    ok: false,
+                                    error: Some("panic during decrypt (job aborted)".to_string()),
+                                    elapsed_ms: None,
+                                    tracks: None,
+                                    scan_cut: None,
+                                },
+                            }
                         }
                         _ => DaemonResult {
                             ok: false,
@@ -858,8 +885,9 @@ pub fn run_daemon() -> std::process::ExitCode {
             },
         };
 
-        let resp = serde_json::to_string(&result)
-            .unwrap_or_else(|_| "{\"ok\":false,\"error\":\"response serialize failure\"}".to_string());
+        let resp = serde_json::to_string(&result).unwrap_or_else(|_| {
+            "{\"ok\":false,\"error\":\"response serialize failure\"}".to_string()
+        });
         if writeln!(stdout, "{resp}").is_err() || stdout.flush().is_err() {
             break;
         }
@@ -952,7 +980,9 @@ fn run_guarded(args: &Args) -> CliResult<(Container, OutputFormat)> {
 /// `-o -` streams raw MP4 bytes: on a terminal that only prints garbage (and corrupts the console).
 pub fn ensure_stdout_is_not_a_terminal(is_terminal: bool) -> CliResult<()> {
     if is_terminal {
-        return Err(invalid("refusing to write media to a terminal; pipe or redirect `-o -` (e.g. `| ffmpeg -f mp4 -i -`)"));
+        return Err(invalid(
+            "refusing to write media to a terminal; pipe or redirect `-o -` (e.g. `| ffmpeg -f mp4 -i -`)",
+        ));
     }
     Ok(())
 }
@@ -962,7 +992,9 @@ pub fn ensure_stdout_is_not_a_terminal(is_terminal: bool) -> CliResult<()> {
 fn run_fmp4_inplace(args: &Args) -> CliResult<(Container, OutputFormat)> {
     init_runtime_config(args);
     if !args.tracks.is_empty() {
-        return Err(invalid("--tracks is not supported with --in-place/--chunks"));
+        return Err(invalid(
+            "--tracks is not supported with --in-place/--chunks",
+        ));
     }
     let paths: Vec<PathBuf> = match &args.chunks {
         Some(dir) => inplace::list_chunks(dir)?,
@@ -970,11 +1002,20 @@ fn run_fmp4_inplace(args: &Args) -> CliResult<(Container, OutputFormat)> {
     };
     if args.in_place {
         let set = inplace::ChunkSet::open(&paths, true)?;
-        inplace::decrypt_fmp4(&set, inplace::Dest::InPlace, &args.keys, args.ffmpeg_path.as_deref(), args.tfdt_rebase)?;
+        inplace::decrypt_fmp4(
+            &set,
+            inplace::Dest::InPlace,
+            &args.keys,
+            args.ffmpeg_path.as_deref(),
+            args.tfdt_rebase,
+        )?;
     } else {
-        let out = args.output.as_deref().ok_or(CliError::Flux(crate::Error::InvalidInput(
-            "-o/--output is required",
-        )))?;
+        let out = args
+            .output
+            .as_deref()
+            .ok_or(CliError::Flux(crate::Error::InvalidInput(
+                "-o/--output is required",
+            )))?;
         let to_stdout = out == Path::new("-");
         if to_stdout {
             ensure_stdout_is_not_a_terminal(std::io::IsTerminal::is_terminal(&std::io::stdout()))?;
@@ -983,8 +1024,18 @@ fn run_fmp4_inplace(args: &Args) -> CliResult<(Container, OutputFormat)> {
             ensure_output_distinct(&inputs, out)?;
         }
         let set = inplace::ChunkSet::open(&paths, false)?;
-        let dest = if to_stdout { inplace::Dest::Stdout } else { inplace::Dest::File(out) };
-        inplace::decrypt_fmp4(&set, dest, &args.keys, args.ffmpeg_path.as_deref(), args.tfdt_rebase)?;
+        let dest = if to_stdout {
+            inplace::Dest::Stdout
+        } else {
+            inplace::Dest::File(out)
+        };
+        inplace::decrypt_fmp4(
+            &set,
+            dest,
+            &args.keys,
+            args.ffmpeg_path.as_deref(),
+            args.tfdt_rebase,
+        )?;
     }
     Ok((Container::Mp4, OutputFormat::FragmentedDecrypt))
 }
@@ -1273,7 +1324,8 @@ fn stream_decrypt_aes128_cbc(
         pad_note = "input length not a multiple of 16 -- trailing bytes passed through raw, no PKCS#7 check possible";
     } else if let Some(last) = pending_block {
         let pad_len = last[15] as usize;
-        let valid_pkcs7 = (1..=16).contains(&pad_len) && last[16 - pad_len..].iter().all(|&b| b as usize == pad_len);
+        let valid_pkcs7 = (1..=16).contains(&pad_len)
+            && last[16 - pad_len..].iter().all(|&b| b as usize == pad_len);
         if valid_pkcs7 {
             writer.write_all(&last[..16 - pad_len])?;
             pad_note = "valid PKCS#7 padding on final block, stripped";
@@ -1457,7 +1509,11 @@ fn box_tree_contains(data: &[u8], target: &[u8; 4]) -> bool {
                 *b"moof",
             ];
             if CONTAINER_TYPES.iter().any(|t| header.box_type.is(t))
-                && scan(&data[offset + hdr_len..offset + box_size], target, depth + 1)
+                && scan(
+                    &data[offset + hdr_len..offset + box_size],
+                    target,
+                    depth + 1,
+                )
             {
                 return true;
             }
@@ -1627,19 +1683,29 @@ fn run_pass2(
             if let Some(key) = &key {
                 let sizes: Vec<usize> = layouts.iter().map(|l| l.size as usize).collect();
                 let __s = std::time::Instant::now();
-                if let Err(e) =
-                    decrypt_run_maybe_parallel(crypto_track, entries, key, key_map, &mut buf, &sizes, &mut scratch)
-                {
+                if let Err(e) = decrypt_run_maybe_parallel(
+                    crypto_track,
+                    entries,
+                    key,
+                    key_map,
+                    &mut buf,
+                    &sizes,
+                    &mut scratch,
+                ) {
                     result = Err(e);
                     return false;
                 }
                 *p2_crypto += __s.elapsed();
                 if key_sanity_on && !key_sanity_checked[track_idx] {
-                    if let Some((off, len)) = first_encrypted_sync_sample_range(entries, layouts, &sizes) {
+                    if let Some((off, len)) =
+                        first_encrypted_sync_sample_range(entries, layouts, &sizes)
+                    {
                         key_sanity_checked[track_idx] = true;
-                        if let Err(detail) =
-                            key_sanity::check_first_sample(&track_codecs[track_idx], &buf[off..off + len], ffmpeg_path)
-                        {
+                        if let Err(detail) = key_sanity::check_first_sample(
+                            &track_codecs[track_idx],
+                            &buf[off..off + len],
+                            ffmpeg_path,
+                        ) {
                             result = Err(CliError::KeySanityCheckFailed { track_id, detail });
                             return false;
                         }
@@ -1723,9 +1789,11 @@ fn run_pass2(
                         first_encrypted_sync_sample_range(run_entries, run_layouts, &sizes)
                     {
                         key_sanity_checked[track_idx] = true;
-                        if let Err(detail) =
-                            key_sanity::check_first_sample(&track_codecs[track_idx], &buf[off..off + len], ffmpeg_path)
-                        {
+                        if let Err(detail) = key_sanity::check_first_sample(
+                            &track_codecs[track_idx],
+                            &buf[off..off + len],
+                            ffmpeg_path,
+                        ) {
                             return Err(CliError::KeySanityCheckFailed { track_id, detail });
                         }
                     }
@@ -2008,7 +2076,10 @@ fn stream_decrypt_to_progressive_mp4(
         &track_chunks,
     )?;
     if __profile {
-        eprintln!("[profile] open_streaming (build moov): {:?}", __t3.elapsed());
+        eprintln!(
+            "[profile] open_streaming (build moov): {:?}",
+            __t3.elapsed()
+        );
     }
 
     let mut out_file = fs::File::create(out_path)?;
@@ -2092,7 +2163,9 @@ fn stream_decrypt_to_progressive_mp4(
         }
         Err(_) => {
             if result.is_ok() {
-                result = Err(CliError::Flux(crate::Error::InvalidInput("writer thread panicked")));
+                result = Err(CliError::Flux(crate::Error::InvalidInput(
+                    "writer thread panicked",
+                )));
             }
             std::time::Duration::ZERO
         }
@@ -2195,8 +2268,24 @@ fn is_he_aac(cfg: &crate::CodecConfig) -> bool {
 fn codec_label(cfg: &crate::CodecConfig) -> &'static str {
     use crate::CodecConfig;
     match cfg {
-        CodecConfig::Avc { .. } => "avc1 (H.264)",
-        CodecConfig::Hevc { .. } => "hvc1/hev1 (H.265)",
+        CodecConfig::Avc { codec_fourcc, .. } => match codec_fourcc {
+            b"avc1" => "avc1 (H.264)",
+            b"avc2" => "avc2 (H.264)",
+            b"avc3" => "avc3 (H.264)",
+            b"avc4" => "avc4 (H.264)",
+            b"dvav" => "dvav (Dolby Vision H.264)",
+            b"dva1" => "dva1 (Dolby Vision H.264)",
+            _ => "avc (H.264)",
+        },
+        CodecConfig::Hevc { codec_fourcc, .. } => match codec_fourcc {
+            b"hvc1" => "hvc1 (H.265)",
+            b"hev1" => "hev1 (H.265)",
+            b"hvc2" => "hvc2 (H.265)",
+            b"hev2" => "hev2 (H.265)",
+            b"dvhe" => "dvhe (Dolby Vision H.265)",
+            b"dvh1" => "dvh1 (Dolby Vision H.265)",
+            _ => "hevc (H.265)",
+        },
         CodecConfig::Vvc { .. } => "vvc1/vvi1 (H.266)",
         CodecConfig::Av1 { .. } => "av01 (AV1)",
         CodecConfig::Vp9 { .. } => "vp09 (VP9)",
@@ -2306,7 +2395,11 @@ fn stream_decrypt_progressive_to_progressive_mp4(
     let (movie_timescale, specs) = cenc_decrypt::harvest_moov_track_specs(&moov_bytes)?;
     let mut crypto_tracks = Vec::new();
     cenc_decrypt::harvest_tracks(
-        if aux_file.is_empty() { &moov_bytes } else { &aux_file },
+        if aux_file.is_empty() {
+            &moov_bytes
+        } else {
+            &aux_file
+        },
         &mut crypto_tracks,
     )?;
     let moov = MovieBox::parse(&moov_bytes)?;
@@ -2429,7 +2522,10 @@ fn stream_decrypt_progressive_to_progressive_mp4(
         track_layout.push(stbl_sample_layout(trak)?);
     }
     if __profile {
-        eprintln!("[profile][progressive] stbl layout harvest: {:?}", __t2.elapsed());
+        eprintln!(
+            "[profile][progressive] stbl layout harvest: {:?}",
+            __t2.elapsed()
+        );
     }
     let __t3 = std::time::Instant::now();
 
@@ -2540,13 +2636,14 @@ fn stream_decrypt_progressive_to_progressive_mp4(
                 Err(_) => break 'outer,
             };
             let __s = std::time::Instant::now();
-            let (run_len, run_bytes) = match read_contiguous_run_stbl(&mut file, &layouts[idx..], &mut buf) {
-                Ok(v) => v,
-                Err(e) => {
-                    result = Err(e);
-                    break 'outer;
-                }
-            };
+            let (run_len, run_bytes) =
+                match read_contiguous_run_stbl(&mut file, &layouts[idx..], &mut buf) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        result = Err(e);
+                        break 'outer;
+                    }
+                };
             __p2_read += __s.elapsed();
             buf.truncate(run_bytes);
             let mut run_pos = 0usize;
@@ -2574,9 +2671,11 @@ fn stream_decrypt_progressive_to_progressive_mp4(
                         && layout.is_sync
                     {
                         key_sanity_checked[track_idx] = true;
-                        if let Err(detail) =
-                            key_sanity::check_first_sample(&track_codecs[track_idx], sample, ffmpeg_path)
-                        {
+                        if let Err(detail) = key_sanity::check_first_sample(
+                            &track_codecs[track_idx],
+                            sample,
+                            ffmpeg_path,
+                        ) {
                             result = Err(CliError::KeySanityCheckFailed { track_id, detail });
                             break 'outer;
                         }
@@ -2600,7 +2699,9 @@ fn stream_decrypt_progressive_to_progressive_mp4(
         }
         Err(_) => {
             if result.is_ok() {
-                result = Err(CliError::Flux(crate::Error::InvalidInput("writer thread panicked")));
+                result = Err(CliError::Flux(crate::Error::InvalidInput(
+                    "writer thread panicked",
+                )));
             }
             std::time::Duration::ZERO
         }
@@ -2667,11 +2768,11 @@ fn decrypt_fragment(
     use crate::cenc_decrypt::{self, KeyMap};
 
     let init_bytes = fs::read(init_path)?;
-    let moov_bytes = crate::media::find_top_box(&init_bytes, b"moov").ok_or(
-        CliError::Flux(crate::Error::UnexpectedBox {
+    let moov_bytes = crate::media::find_top_box(&init_bytes, b"moov").ok_or(CliError::Flux(
+        crate::Error::UnexpectedBox {
             expected: "moov (--fragments-info's init segment)",
-        }),
-    )?;
+        },
+    ))?;
     let crypto_tracks = cenc_decrypt::harvest_moov_crypto(moov_bytes)?;
     let trex_defaults = cenc_decrypt::harvest_trex_defaults(moov_bytes);
     if crypto_tracks.is_empty() {
@@ -2748,11 +2849,11 @@ fn decrypt_fragment(
             if crypto_track.tenc.default_is_protected == 0 {
                 continue;
             }
-            let key = key_map.get(&crypto_track.tenc.default_kid).ok_or(
-                CliError::Flux(crate::Error::InvalidInput(
+            let key = key_map
+                .get(&crypto_track.tenc.default_kid)
+                .ok_or(CliError::Flux(crate::Error::InvalidInput(
                     "no content key for the track's default_KID",
-                )),
-            )?;
+                )))?;
             if ft.layout.len() != ft.crypto.len() {
                 return Err(CliError::Flux(crate::Error::InvalidInput(
                     "sample count mismatch between trun and senc",
@@ -2762,7 +2863,8 @@ fn decrypt_fragment(
             let sizes: Vec<usize> = ft.layout.iter().map(|l| l.size as usize).collect();
             for (run_start, run_len) in split_into_contiguous_runs(&ft.layout) {
                 let run_bytes = sizes[run_start..run_start + run_len].iter().sum::<usize>();
-                let buf_start = usize::try_from(ft.layout[run_start].file_offset).unwrap_or(usize::MAX);
+                let buf_start =
+                    usize::try_from(ft.layout[run_start].file_offset).unwrap_or(usize::MAX);
                 let buf_end = buf_start.saturating_add(run_bytes);
                 if buf_end > data.len() {
                     return Err(CliError::Flux(crate::Error::BufferTooShort {
@@ -2815,8 +2917,10 @@ fn decrypt_fragment(
         let moof_off = *moof_off as usize;
         let moof_end = moof_off + *moof_size as usize;
         out.extend_from_slice(&data[pos..moof_off]);
-        let (mut stripped, total_removed) =
-            cenc_decrypt::strip_sample_encryption_boxes(&data[moof_off..moof_end], bytes_removed_before);
+        let (mut stripped, total_removed) = cenc_decrypt::strip_sample_encryption_boxes(
+            &data[moof_off..moof_end],
+            bytes_removed_before,
+        );
         if let Some(base) = tfdt_base {
             inplace::rebase_moof_tfdt(&mut stripped, base);
         }
@@ -2836,7 +2940,9 @@ fn rewrite_init_segment_clear(data: &[u8], out_path: &Path) -> CliResult<()> {
     use crate::pipeline::TrackSpec;
 
     let moov_bytes = crate::media::find_top_box(data, b"moov").ok_or(CliError::Flux(
-        crate::Error::UnexpectedBox { expected: "moov (bare init segment)" },
+        crate::Error::UnexpectedBox {
+            expected: "moov (bare init segment)",
+        },
     ))?;
     let (movie_timescale, specs) = cenc_decrypt::harvest_moov_track_specs(moov_bytes)?;
     if specs.is_empty() {
@@ -2880,7 +2986,10 @@ fn try_decrypt_webm(
     }
 
     let input = fs::read(in_path)?;
-    let key_pairs = keys.iter().map(|s| parse_key(s)).collect::<CliResult<Vec<_>>>()?;
+    let key_pairs = keys
+        .iter()
+        .map(|s| parse_key(s))
+        .collect::<CliResult<Vec<_>>>()?;
     let output = crate::webm_decrypt::decrypt_webm(&input, &key_pairs)?;
     fs::write(out_path, &output)?;
     Ok(Some((Container::Webm, OutputFormat::WebmDecrypt)))
@@ -3070,17 +3179,30 @@ mod hardening_tests {
     fn bounded_line_reader_caps_line_length() {
         let mut buf = Vec::new();
         let mut r = std::io::Cursor::new(b"abc\nxxxxxxxxxxxxxxxx\nok\n".to_vec());
-        assert_eq!(read_bounded_line(&mut r, 8, &mut buf).unwrap(), LineRead::Line);
+        assert_eq!(
+            read_bounded_line(&mut r, 8, &mut buf).unwrap(),
+            LineRead::Line
+        );
         assert_eq!(buf, b"abc");
-        assert_eq!(read_bounded_line(&mut r, 8, &mut buf).unwrap(), LineRead::TooLong);
-        assert_eq!(read_bounded_line(&mut r, 8, &mut buf).unwrap(), LineRead::Line);
+        assert_eq!(
+            read_bounded_line(&mut r, 8, &mut buf).unwrap(),
+            LineRead::TooLong
+        );
+        assert_eq!(
+            read_bounded_line(&mut r, 8, &mut buf).unwrap(),
+            LineRead::Line
+        );
         assert_eq!(buf, b"ok");
-        assert_eq!(read_bounded_line(&mut r, 8, &mut buf).unwrap(), LineRead::Eof);
+        assert_eq!(
+            read_bounded_line(&mut r, 8, &mut buf).unwrap(),
+            LineRead::Eof
+        );
     }
 
     #[test]
     fn wipe_string_empties_the_string() {
-        let mut s = String::from("00112233445566778899aabbccddeeff:00112233445566778899aabbccddeeff");
+        let mut s =
+            String::from("00112233445566778899aabbccddeeff:00112233445566778899aabbccddeeff");
         wipe_string(&mut s);
         assert!(s.is_empty());
     }

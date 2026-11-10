@@ -352,10 +352,12 @@ impl Serialize for DecoderConfigDescriptor {
     type Error = Error;
 
     fn serialized_len(&self) -> usize {
-        1
-            + VARINT_WIDTH_FIXED
+        1 + VARINT_WIDTH_FIXED
             + DECODER_CONFIG_FIXED
-            + self.decoder_specific_info.as_ref().map_or(0, |dsi| dsi.serialized_len())
+            + self
+                .decoder_specific_info
+                .as_ref()
+                .map_or(0, |dsi| dsi.serialized_len())
     }
 
     fn serialize_into(&self, buf: &mut [u8]) -> Result<usize> {
@@ -549,17 +551,22 @@ impl Serialize for ESDescriptor {
     type Error = Error;
 
     fn serialized_len(&self) -> usize {
-        let body_size = 2 + 1
+        let body_size = 2
+            + 1
             + if self.stream_dependence_flag { 2 } else { 0 }
             + if self.url_flag {
                 1 + self.url.as_ref().map_or(0, |u| u.len())
-            } else { 0 }
+            } else {
+                0
+            }
             + if self.ocr_stream_flag { 2 } else { 0 };
 
-        1
-            + VARINT_WIDTH_FIXED
+        1 + VARINT_WIDTH_FIXED
             + body_size
-            + self.decoder_config.as_ref().map_or(0, |dc| dc.serialized_len())
+            + self
+                .decoder_config
+                .as_ref()
+                .map_or(0, |dc| dc.serialized_len())
             + self.sl_config.as_ref().map_or(0, |sl| sl.serialized_len())
     }
 

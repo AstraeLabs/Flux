@@ -5,13 +5,23 @@ use std::path::{Path, PathBuf};
 use flux::cli::{self, Args};
 
 fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
 }
 
 fn unique_temp_path(name: &str) -> PathBuf {
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let (stem, ext) = name.rsplit_once('.').expect("output name must have an extension");
-    std::env::temp_dir().join(format!("flux-test-{}-{stem}-{nanos}.{ext}", std::process::id()))
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let (stem, ext) = name
+        .rsplit_once('.')
+        .expect("output name must have an extension");
+    std::env::temp_dir().join(format!(
+        "flux-test-{}-{stem}-{nanos}.{ext}",
+        std::process::id()
+    ))
 }
 
 fn extract_text_args(input: PathBuf, output: PathBuf) -> Args {
@@ -56,17 +66,28 @@ fn extracts_a_real_wvtt_track_byte_for_byte_matching_the_gpac_reference() {
     let vtt = std::fs::read_to_string(&out).expect("output .vtt must be readable UTF-8 text");
     std::fs::remove_file(&out).ok();
 
-    assert!(vtt.starts_with("WEBVTT\n\n"), "must start with a bare WEBVTT header");
+    assert!(
+        vtt.starts_with("WEBVTT\n\n"),
+        "must start with a bare WEBVTT header"
+    );
 
-    assert_eq!(vtt.matches(" --> ").count(), 89, "cue count must match the MP4Box reference");
+    assert_eq!(
+        vtt.matches(" --> ").count(),
+        89,
+        "cue count must match the MP4Box reference"
+    );
 
     assert!(
-        vtt.contains("00:00:15.000 --> 00:00:18.000 align:start\n<v Proog>At the left we can see...</v>\n"),
+        vtt.contains(
+            "00:00:15.000 --> 00:00:18.000 align:start\n<v Proog>At the left we can see...</v>\n"
+        ),
         "first cue (text + timing + settings) must match the MP4Box reference verbatim:\n{vtt}"
     );
 
     assert!(
-        vtt.contains("00:00:20.083 --> 00:00:22.000\n<v Proog>...the <c.highlight>head-snarlers</c></v>\n"),
+        vtt.contains(
+            "00:00:20.083 --> 00:00:22.000\n<v Proog>...the <c.highlight>head-snarlers</c></v>\n"
+        ),
         "a cue with no settings must render with no trailing settings text:\n{vtt}"
     );
 
@@ -89,10 +110,23 @@ fn dump_recognizes_the_wvtt_track_and_reports_correct_sample_count() {
         .arg(fixture("webvtt_elephants_dream.mp4"))
         .output()
         .expect("failed to run flux binary");
-    assert!(output.status.success(), "--dump must succeed: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "--dump must succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("\"stream_type\": \"Subtitle\""), "must report the wvtt track as Subtitle:\n{stdout}");
-    assert!(stdout.contains("\"codec_string\": \"wvtt\""), "must report the wvtt codec string:\n{stdout}");
-    assert!(stdout.contains("\"sample_count\": 166"), "must report the real fragmented sample count:\n{stdout}");
+    assert!(
+        stdout.contains("\"stream_type\": \"Subtitle\""),
+        "must report the wvtt track as Subtitle:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("\"codec_string\": \"wvtt\""),
+        "must report the wvtt codec string:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("\"sample_count\": 166"),
+        "must report the real fragmented sample count:\n{stdout}"
+    );
 }

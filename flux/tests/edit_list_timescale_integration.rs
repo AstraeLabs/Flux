@@ -8,13 +8,23 @@ const KEY: &str = "f8c80c25690f47368132430e5c6994ce:7bc99cb1dd0623cd0b5065056a57
 const SAFE_MAX_TRACK_TICKS: u64 = 1 << 31;
 
 fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
 }
 
 fn unique_temp_path(name: &str) -> PathBuf {
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let (stem, ext) = name.rsplit_once('.').expect("output name must have an extension");
-    std::env::temp_dir().join(format!("flux-test-{}-{stem}-{nanos}.{ext}", std::process::id()))
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let (stem, ext) = name
+        .rsplit_once('.')
+        .expect("output name must have an extension");
+    std::env::temp_dir().join(format!(
+        "flux-test-{}-{stem}-{nanos}.{ext}",
+        std::process::id()
+    ))
 }
 
 fn base_args(input: PathBuf, output: PathBuf, keys: Vec<String>) -> Args {
@@ -56,12 +66,20 @@ fn dump_json(input: &Path) -> serde_json::Value {
         .arg(input)
         .output()
         .expect("failed to run flux binary");
-    assert!(output.status.success(), "--dump must succeed: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "--dump must succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     serde_json::from_slice(&output.stdout).expect("--dump -j must print valid JSON")
 }
 
 fn positions(data: &[u8], fourcc: &[u8; 4]) -> Vec<usize> {
-    data.windows(4).enumerate().filter(|(_, w)| *w == fourcc).map(|(i, _)| i).collect()
+    data.windows(4)
+        .enumerate()
+        .filter(|(_, w)| *w == fourcc)
+        .map(|(i, _)| i)
+        .collect()
 }
 
 fn be32(data: &[u8], at: usize) -> u32 {
@@ -74,7 +92,11 @@ fn put32(data: &mut [u8], at: usize, v: u32) {
 
 /// Offset of the `mdhd` timescale field (version 0), `idx`-th track
 fn mdhd_timescale_at(data: &[u8], idx: usize) -> usize {
-    assert_eq!(data[positions(data, b"mdhd")[idx] + 4], 0, "tests use mdhd version 0");
+    assert_eq!(
+        data[positions(data, b"mdhd")[idx] + 4],
+        0,
+        "tests use mdhd version 0"
+    );
     positions(data, b"mdhd")[idx] + 4 + 4 + 8
 }
 
@@ -97,9 +119,17 @@ fn rescaled(media_time: u32, old_ts: u32, new_ts: u32) -> u32 {
 fn inflated_video() -> (PathBuf, u32, u32, u32) {
     let mut data = std::fs::read(fixture("video_edit_list.mp4")).unwrap();
     let stts = positions(&data, b"stts")[0];
-    assert_eq!(be32(&data, stts + 8), 1, "fixture must have a single stts entry");
+    assert_eq!(
+        be32(&data, stts + 8),
+        1,
+        "fixture must have a single stts entry"
+    );
     let count = be32(&data, stts + 12);
-    put32(&mut data, stts + 16, (SAFE_MAX_TRACK_TICKS * 2 / u64::from(count)) as u32);
+    put32(
+        &mut data,
+        stts + 16,
+        (SAFE_MAX_TRACK_TICKS * 2 / u64::from(count)) as u32,
+    );
 
     let old_ts = be32(&data, mdhd_timescale_at(&data, 0));
     let old_media_time = be32(&data, elst_media_time_at(&data));
@@ -119,13 +149,20 @@ fn progressive_video_edit_list_follows_a_rescaled_timescale() {
 
     let bytes = std::fs::read(&out).unwrap();
     let new_ts = be32(&bytes, mdhd_timescale_at(&bytes, 0));
-    assert!(new_ts < old_ts, "the overflowing track must have been rescaled ({old_ts} -> {new_ts})");
+    assert!(
+        new_ts < old_ts,
+        "the overflowing track must have been rescaled ({old_ts} -> {new_ts})"
+    );
     assert_eq!(
         be32(&bytes, elst_media_time_at(&bytes)),
         rescaled(old_media_time, old_ts, new_ts),
         "media_time must be re-expressed in the new media timescale"
     );
-    assert_eq!(elst_segment_duration(&bytes), old_seg, "segment_duration is in the movie timescale and must not change");
+    assert_eq!(
+        elst_segment_duration(&bytes),
+        old_seg,
+        "segment_duration is in the movie timescale and must not change"
+    );
 
     std::fs::remove_file(&src).ok();
     std::fs::remove_file(&out).ok();
@@ -152,17 +189,25 @@ fn inflated_audio() -> PathBuf {
 fn audio_keeps_its_sample_rate_as_timescale_and_a_matching_priming() {
     let src = inflated_audio();
     let out = unique_temp_path("audio-inflated-out.mp4");
-    cli::run(base_args(src.clone(), out.clone(), vec![KEY.to_string()])).expect("decrypt must succeed");
+    cli::run(base_args(src.clone(), out.clone(), vec![KEY.to_string()]))
+        .expect("decrypt must succeed");
 
     let bytes = std::fs::read(&out).unwrap();
-    assert_eq!(be32(&bytes, mdhd_timescale_at(&bytes, 0)), 48_000, "audio must fall back to its sampling rate, not an arbitrary timescale");
+    assert_eq!(
+        be32(&bytes, mdhd_timescale_at(&bytes, 0)),
+        48_000,
+        "audio must fall back to its sampling rate, not an arbitrary timescale"
+    );
     // 426667 / 10 MHz = 42.67 ms = the 2048-sample AAC priming
     assert_eq!(be32(&bytes, elst_media_time_at(&bytes)), 2048);
 
     let report = dump_json(&out);
     let stream = &report["streams"][0];
     assert_eq!(stream["time_scale"], 48_000);
-    assert!(stream.get("edit_list_timescale_mismatch").is_none(), "{report}");
+    assert!(
+        stream.get("edit_list_timescale_mismatch").is_none(),
+        "{report}"
+    );
 
     std::fs::remove_file(&src).ok();
     std::fs::remove_file(&out).ok();
@@ -172,12 +217,16 @@ fn audio_keeps_its_sample_rate_as_timescale_and_a_matching_priming() {
 fn untouched_timescale_leaves_the_edit_list_byte_identical() {
     let src = fixture("cenc_audio.mp4");
     let out = unique_temp_path("audio-plain-out.mp4");
-    cli::run(base_args(src.clone(), out.clone(), vec![KEY.to_string()])).expect("decrypt must succeed");
+    cli::run(base_args(src.clone(), out.clone(), vec![KEY.to_string()]))
+        .expect("decrypt must succeed");
 
     let src_bytes = std::fs::read(&src).unwrap();
     let bytes = std::fs::read(&out).unwrap();
     assert_eq!(be32(&bytes, mdhd_timescale_at(&bytes, 0)), 48_000);
-    assert_eq!(be32(&bytes, elst_media_time_at(&bytes)), be32(&src_bytes, elst_media_time_at(&src_bytes)));
+    assert_eq!(
+        be32(&bytes, elst_media_time_at(&bytes)),
+        be32(&src_bytes, elst_media_time_at(&src_bytes))
+    );
     std::fs::remove_file(&out).ok();
 }
 
@@ -187,10 +236,16 @@ fn dump_reports_the_edit_list_and_the_audio_timescale_mismatch() {
     let report = dump_json(&src);
     std::fs::remove_file(&src).ok();
 
-    assert_eq!(report["movie_timescale"].as_u64().is_some(), true, "{report}");
+    assert_eq!(
+        report["movie_timescale"].as_u64().is_some(),
+        true,
+        "{report}"
+    );
     let stream = &report["streams"][0];
     assert_eq!(stream["time_scale"], 10_000_000);
-    let edits = stream["edit_list"].as_array().expect("edit_list must be reported");
+    let edits = stream["edit_list"]
+        .as_array()
+        .expect("edit_list must be reported");
     assert_eq!(edits.len(), 1);
     assert_eq!(edits[0]["media_time"], 426_667);
     assert!((edits[0]["media_time_seconds"].as_f64().unwrap() - 0.0426667).abs() < 1e-6);

@@ -40,7 +40,6 @@ pub struct XmlSubtitleSampleEntry {
 }
 
 impl XmlSubtitleSampleEntry {
-
     pub fn new(namespace: impl Into<String>) -> Self {
         Self {
             data_reference_index: 1,
@@ -52,7 +51,6 @@ impl XmlSubtitleSampleEntry {
     }
 
     pub fn bare_parse(bytes: &[u8]) -> Result<Self> {
-
         if bytes.len() < 19 {
             return Err(Error::BufferTooShort {
                 need: 19,
@@ -104,7 +102,6 @@ impl Serialize for XmlSubtitleSampleEntry {
     type Error = Error;
 
     fn serialized_len(&self) -> usize {
-
         let mut n = BOX_HDR + 8;
 
         n += cstring_len(&self.namespace);
@@ -162,12 +159,10 @@ impl Serialize for XmlSubtitleSampleEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct WebVttConfigurationBox {
-
     pub config: String,
 }
 
 impl WebVttConfigurationBox {
-
     pub fn new(config: impl Into<String>) -> Self {
         Self {
             config: config.into(),
@@ -230,12 +225,10 @@ impl Serialize for WebVttConfigurationBox {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct CuePayloadBox {
-
     pub cue_text: String,
 }
 
 impl CuePayloadBox {
-
     pub fn new(cue_text: impl Into<String>) -> Self {
         Self {
             cue_text: cue_text.into(),
@@ -298,12 +291,10 @@ impl Serialize for CuePayloadBox {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct CueSettingsBox {
-
     pub settings: String,
 }
 
 impl CueSettingsBox {
-
     pub fn new(settings: impl Into<String>) -> Self {
         Self {
             settings: settings.into(),
@@ -366,12 +357,10 @@ impl Serialize for CueSettingsBox {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct CueIdBox {
-
     pub cue_id: String,
 }
 
 impl CueIdBox {
-
     pub fn new(cue_id: impl Into<String>) -> Self {
         Self {
             cue_id: cue_id.into(),
@@ -440,7 +429,6 @@ pub struct VttCueBox {
 }
 
 impl VttCueBox {
-
     pub fn new(payload: impl Into<String>) -> Self {
         Self {
             payload: CuePayloadBox::new(payload),
@@ -542,7 +530,6 @@ impl Serialize for VttCueBox {
 pub struct VttEmptyCueBox;
 
 impl VttEmptyCueBox {
-
     pub fn bare_parse(bytes: &[u8]) -> Result<Self> {
         if bytes.len() < BOX_HDR {
             return Err(Error::BufferTooShort {
@@ -586,7 +573,6 @@ impl Serialize for VttEmptyCueBox {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct WvttSampleEntry {
-
     pub data_reference_index: u16,
 
     pub config: WebVttConfigurationBox,
@@ -595,7 +581,6 @@ pub struct WvttSampleEntry {
 }
 
 impl WvttSampleEntry {
-
     pub fn new(config: impl Into<String>) -> Self {
         Self {
             data_reference_index: 1,
@@ -605,7 +590,6 @@ impl WvttSampleEntry {
     }
 
     pub fn bare_parse(bytes: &[u8]) -> Result<Self> {
-
         if bytes.len() < 24 {
             return Err(Error::BufferTooShort {
                 need: 24,
@@ -668,7 +652,6 @@ impl Serialize for WvttSampleEntry {
     type Error = Error;
 
     fn serialized_len(&self) -> usize {
-
         let mut n = BOX_HDR + 8 + self.config.serialized_len();
         for eb in &self.extra_boxes {
             n += eb.serialized_len();

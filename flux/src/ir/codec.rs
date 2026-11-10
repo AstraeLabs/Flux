@@ -42,11 +42,15 @@ pub enum CodecConfig {
         config: AVCConfigurationBox,
         width: u16,
         height: u16,
+        codec_fourcc: [u8; 4],
+        extra_boxes: Vec<crate::init_segment::OpaqueBox>,
     },
     Hevc {
         config: HEVCConfigurationBox,
         width: u16,
         height: u16,
+        codec_fourcc: [u8; 4],
+        extra_boxes: Vec<crate::init_segment::OpaqueBox>,
     },
     Vvc {
         config: VvcConfigurationBox,
@@ -183,7 +187,7 @@ impl CodecConfig {
     }
 
     pub fn is_muxable_in_bmff(&self) -> bool {
-        !self.is_subtitle()
+        !matches!(self, CodecConfig::Vorbis { .. })
     }
 }
 

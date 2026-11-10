@@ -6,13 +6,23 @@ use std::process::Command;
 use flux::cli::{self, Args};
 
 fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
 }
 
 fn unique_temp_path(name: &str) -> PathBuf {
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let (stem, ext) = name.rsplit_once('.').expect("fixture output name must have an extension");
-    std::env::temp_dir().join(format!("flux-test-{}-{stem}-{nanos}.{ext}", std::process::id()))
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let (stem, ext) = name
+        .rsplit_once('.')
+        .expect("fixture output name must have an extension");
+    std::env::temp_dir().join(format!(
+        "flux-test-{}-{stem}-{nanos}.{ext}",
+        std::process::id()
+    ))
 }
 
 fn base_args(input: PathBuf, output: PathBuf) -> Args {
@@ -84,9 +94,15 @@ fn find_elst_entries(data: &[u8]) -> Vec<RawEditListEntry> {
 fn ffprobe_video_summary(path: &Path) -> Option<(f64, f64, usize)> {
     let out = Command::new("ffprobe")
         .args([
-            "-v", "error", "-select_streams", "v:0", "-count_frames",
-            "-show_entries", "stream=start_time,duration,nb_read_frames",
-            "-of", "csv=p=0",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-count_frames",
+            "-show_entries",
+            "stream=start_time,duration,nb_read_frames",
+            "-of",
+            "csv=p=0",
         ])
         .arg(path)
         .output()
@@ -107,9 +123,19 @@ fn progressive_remux_carries_a_video_edit_list_verbatim() {
     let src = fixture("video_edit_list.mp4");
     let src_bytes = std::fs::read(&src).unwrap();
     let src_entries = find_elst_entries(&src_bytes);
-    assert_eq!(src_entries.len(), 1, "fixture must carry exactly one edit-list entry");
-    assert!(src_entries[0].media_time > 0, "fixture must encode a leading (media_time > 0) trim");
-    assert_ne!(src_entries[0].segment_duration, 0, "fixture must encode a bounded segment_duration");
+    assert_eq!(
+        src_entries.len(),
+        1,
+        "fixture must carry exactly one edit-list entry"
+    );
+    assert!(
+        src_entries[0].media_time > 0,
+        "fixture must encode a leading (media_time > 0) trim"
+    );
+    assert_ne!(
+        src_entries[0].segment_duration, 0,
+        "fixture must encode a bounded segment_duration"
+    );
 
     let out = unique_temp_path("video-edit-list-out.mp4");
     let args = base_args(src.clone(), out.clone());
@@ -125,9 +151,18 @@ fn progressive_remux_carries_a_video_edit_list_verbatim() {
     );
 
     if let Some((start_time, duration, frames)) = ffprobe_video_summary(&out) {
-        assert_eq!(frames, 40, "edit list must trim exactly the leading 10 samples, not the trailing ones");
-        assert!((duration - 1.6).abs() < 0.01, "reported duration must match segment_duration ({duration})");
-        assert!(start_time.abs() < 0.01, "reported start_time must be 0 (edit list already accounts for the trim)");
+        assert_eq!(
+            frames, 40,
+            "edit list must trim exactly the leading 10 samples, not the trailing ones"
+        );
+        assert!(
+            (duration - 1.6).abs() < 0.01,
+            "reported duration must match segment_duration ({duration})"
+        );
+        assert!(
+            start_time.abs() < 0.01,
+            "reported start_time must be 0 (edit list already accounts for the trim)"
+        );
     } else {
         eprintln!("ffprobe not found on PATH -- skipping decoded-frame-count verification");
     }

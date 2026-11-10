@@ -48,7 +48,8 @@ pub fn decode_avc_sps(sps_bytes: &[u8]) -> Result<AvcSpsInfo> {
     let _sps_id = r.read_ue("seq_parameter_set_id")?;
 
     let chroma_format_idc = if is_high_profile(profile_idc) {
-        let chroma_format_idc = u8::try_from(r.read_ue("chroma_format_idc")?.min(255)).unwrap_or(255);
+        let chroma_format_idc =
+            u8::try_from(r.read_ue("chroma_format_idc")?.min(255)).unwrap_or(255);
         if chroma_format_idc == 3 {
             let _ = r.read_flag("separate_colour_plane_flag")?;
         }
@@ -196,10 +197,12 @@ pub fn decode_hevc_sps(sps_bytes: &[u8]) -> Result<HevcSpsInfo> {
         _ => 1,
     };
 
-    let width = pic_width_in_luma_samples
-        .saturating_sub((sub_width_c as u64).saturating_mul(conf_win_left.saturating_add(conf_win_right)));
-    let height = pic_height_in_luma_samples
-        .saturating_sub((sub_height_c as u64).saturating_mul(conf_win_top.saturating_add(conf_win_bottom)));
+    let width = pic_width_in_luma_samples.saturating_sub(
+        (sub_width_c as u64).saturating_mul(conf_win_left.saturating_add(conf_win_right)),
+    );
+    let height = pic_height_in_luma_samples.saturating_sub(
+        (sub_height_c as u64).saturating_mul(conf_win_top.saturating_add(conf_win_bottom)),
+    );
 
     Ok(HevcSpsInfo {
         width: u32::try_from(width).unwrap_or(u32::MAX),

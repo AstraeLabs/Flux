@@ -4,6 +4,7 @@ use crate::error::{Error, Result};
 use bitforge::{Parse, Serialize};
 
 pub const MLPA_FOURCC: [u8; 4] = *b"mlpa";
+pub const DMLP_FOURCC: [u8; 4] = *b"dmlp";
 pub const MLP_BODY_LEN: usize = 12;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

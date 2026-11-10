@@ -67,7 +67,6 @@ pub fn annexb_to_length_prefixed(annexb: &[u8]) -> Vec<u8> {
     out
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

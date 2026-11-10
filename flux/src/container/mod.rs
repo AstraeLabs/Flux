@@ -2,9 +2,9 @@ pub mod media;
 pub mod pipeline;
 pub mod progressive;
 pub mod progressive_demux;
-#[cfg(feature = "cenc")]
-pub mod webm_decrypt;
-#[cfg(feature = "sample-aes")]
-pub mod ts_sample_aes;
 #[cfg(feature = "sample-aes")]
 pub mod ts_bbts_decrypt;
+#[cfg(feature = "sample-aes")]
+pub mod ts_sample_aes;
+#[cfg(feature = "cenc")]
+pub mod webm_decrypt;

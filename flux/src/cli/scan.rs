@@ -47,7 +47,8 @@ pub(super) fn scan_chunk(path: &Path) -> CliResult<(Vec<ScanTrack>, Option<u64>)
     let mut first_senc_idx: Option<usize> = None;
     for (idx, &(s, e)) in moofs.iter().enumerate() {
         let moof_bytes = &data[s as usize..e as usize];
-        for (track_id, has_senc) in crate::cenc_decrypt::moof_sample_encryption_by_track(moof_bytes) {
+        for (track_id, has_senc) in crate::cenc_decrypt::moof_sample_encryption_by_track(moof_bytes)
+        {
             let entry = per_track.entry(track_id).or_insert((0, 0));
             if has_senc {
                 entry.0 += 1;
@@ -58,16 +59,17 @@ pub(super) fn scan_chunk(path: &Path) -> CliResult<(Vec<ScanTrack>, Option<u64>)
         }
     }
 
-    let scan_cut = first_senc_idx
-        .and_then(|k| moofs.get(k + 1).map(|&(s, _)| s));
+    let scan_cut = first_senc_idx.and_then(|k| moofs.get(k + 1).map(|&(s, _)| s));
 
     let tracks = per_track
         .into_iter()
-        .map(|(track_id, (encrypted_fragments, clear_fragments))| ScanTrack {
-            track_id,
-            encrypted_fragments,
-            clear_fragments,
-        })
+        .map(
+            |(track_id, (encrypted_fragments, clear_fragments))| ScanTrack {
+                track_id,
+                encrypted_fragments,
+                clear_fragments,
+            },
+        )
         .collect();
     Ok((tracks, scan_cut))
 }
@@ -99,7 +101,5 @@ fn find_fourcc(haystack: &[u8], needle: &[u8; 4]) -> Option<usize> {
     if needle.len() > haystack.len() {
         return None;
     }
-    haystack
-        .windows(needle.len())
-        .position(|w| w == needle)
+    haystack.windows(needle.len()).position(|w| w == needle)
 }

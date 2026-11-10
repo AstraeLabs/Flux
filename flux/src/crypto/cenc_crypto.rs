@@ -168,7 +168,11 @@ pub(crate) fn cbcs_pattern(
 fn decrypt_blocks_in_place(dec: &mut Aes128CbcDec, bytes: &mut [u8], scratch: &mut CbcScratch) {
     let blocks = &mut scratch.0;
     blocks.clear();
-    blocks.extend(bytes.chunks_exact(KEY_LEN).map(Block::<Aes128CbcDec>::clone_from_slice));
+    blocks.extend(
+        bytes
+            .chunks_exact(KEY_LEN)
+            .map(Block::<Aes128CbcDec>::clone_from_slice),
+    );
     dec.decrypt_blocks_mut(blocks);
     for (dst, block) in bytes.chunks_exact_mut(KEY_LEN).zip(blocks.iter()) {
         dst.copy_from_slice(block);
@@ -197,7 +201,14 @@ pub(crate) fn cbcs_sample(
     let block_cipher = aes::Aes128::new(key.into());
 
     if entry.subsamples.is_empty() {
-        cbcs_pattern(&block_cipher, &seed_iv, crypt_blocks, skip_blocks, data, scratch);
+        cbcs_pattern(
+            &block_cipher,
+            &seed_iv,
+            crypt_blocks,
+            skip_blocks,
+            data,
+            scratch,
+        );
         return Ok(());
     }
 
@@ -250,7 +261,12 @@ pub(crate) fn cbc1_sample(
     Ok(())
 }
 
-fn cens_pattern(cipher: &mut Aes128Ctr, crypt_byte_block: u8, skip_byte_block: u8, range: &mut [u8]) {
+fn cens_pattern(
+    cipher: &mut Aes128Ctr,
+    crypt_byte_block: u8,
+    skip_byte_block: u8,
+    range: &mut [u8],
+) {
     let (crypt_blocks, skip_blocks) = if crypt_byte_block == 0 && skip_byte_block == 0 {
         (1usize, 0usize)
     } else {
@@ -313,7 +329,12 @@ pub(crate) fn cens_sample(
     for sub in &entry.subsamples {
         offset += sub.bytes_of_clear_data as usize;
         let end = offset + sub.bytes_of_protected_data as usize;
-        cens_pattern(&mut cipher, crypt_blocks, skip_blocks, &mut data[offset..end]);
+        cens_pattern(
+            &mut cipher,
+            crypt_blocks,
+            skip_blocks,
+            &mut data[offset..end],
+        );
         offset = end;
     }
     Ok(())
@@ -324,7 +345,11 @@ mod tests {
     use super::*;
     use aes::cipher::BlockEncryptMut;
 
-    fn tenc(crypt_byte_block: u8, skip_byte_block: u8, constant_iv: Option<[u8; KEY_LEN]>) -> TrackEncryptionBox {
+    fn tenc(
+        crypt_byte_block: u8,
+        skip_byte_block: u8,
+        constant_iv: Option<[u8; KEY_LEN]>,
+    ) -> TrackEncryptionBox {
         TrackEncryptionBox {
             version: 1,
             default_crypt_byte_block: crypt_byte_block,
@@ -344,7 +369,6 @@ mod tests {
             explicit_kid: None,
         }
     }
-
 
     #[test]
     fn apply_ctr_matches_a_manually_built_ctr128be_keystream() {
@@ -381,12 +405,26 @@ mod tests {
         let original: Vec<u8> = (0u8..64).collect();
         let mut data = original.clone();
         let subsamples = vec![
-            SubSampleEntry { bytes_of_clear_data: 10, bytes_of_protected_data: 22 },
-            SubSampleEntry { bytes_of_clear_data: 5, bytes_of_protected_data: 27 },
+            SubSampleEntry {
+                bytes_of_clear_data: 10,
+                bytes_of_protected_data: 22,
+            },
+            SubSampleEntry {
+                bytes_of_clear_data: 5,
+                bytes_of_protected_data: 27,
+            },
         ];
         apply_ctr(&iv, &key, &subsamples, &mut data).unwrap();
-        assert_eq!(&data[0..10], &original[0..10], "first clear run must be untouched");
-        assert_eq!(&data[32..37], &original[32..37], "second clear run must be untouched");
+        assert_eq!(
+            &data[0..10],
+            &original[0..10],
+            "first clear run must be untouched"
+        );
+        assert_eq!(
+            &data[32..37],
+            &original[32..37],
+            "second clear run must be untouched"
+        );
         assert_ne!(&data[10..32], &original[10..32]);
         assert_ne!(&data[37..64], &original[37..64]);
 
@@ -405,7 +443,6 @@ mod tests {
         let mut data = [0u8; 16];
         assert!(apply_ctr(&[0u8; 4], &[0u8; KEY_LEN], &[], &mut data).is_err());
     }
-
 
     fn reference_cbc_pattern_encrypt(
         key: &[u8; KEY_LEN],
@@ -478,8 +515,14 @@ mod tests {
         let e = entry(
             vec![],
             vec![
-                SubSampleEntry { bytes_of_clear_data: 0, bytes_of_protected_data: 16 },
-                SubSampleEntry { bytes_of_clear_data: 0, bytes_of_protected_data: 16 },
+                SubSampleEntry {
+                    bytes_of_clear_data: 0,
+                    bytes_of_protected_data: 16,
+                },
+                SubSampleEntry {
+                    bytes_of_clear_data: 0,
+                    bytes_of_protected_data: 16,
+                },
             ],
         );
         let mut scratch = CbcScratch::default();
@@ -502,8 +545,14 @@ mod tests {
         let e = entry(
             vec![],
             vec![
-                SubSampleEntry { bytes_of_clear_data: 0, bytes_of_protected_data: 16 },
-                SubSampleEntry { bytes_of_clear_data: 0, bytes_of_protected_data: 16 },
+                SubSampleEntry {
+                    bytes_of_clear_data: 0,
+                    bytes_of_protected_data: 16,
+                },
+                SubSampleEntry {
+                    bytes_of_clear_data: 0,
+                    bytes_of_protected_data: 16,
+                },
             ],
         );
         let mut scratch = CbcScratch::default();
@@ -516,8 +565,14 @@ mod tests {
         let e_cbcs = entry(
             vec![],
             vec![
-                SubSampleEntry { bytes_of_clear_data: 0, bytes_of_protected_data: 16 },
-                SubSampleEntry { bytes_of_clear_data: 0, bytes_of_protected_data: 16 },
+                SubSampleEntry {
+                    bytes_of_clear_data: 0,
+                    bytes_of_protected_data: 16,
+                },
+                SubSampleEntry {
+                    bytes_of_clear_data: 0,
+                    bytes_of_protected_data: 16,
+                },
             ],
         );
         cbcs_sample(&t_cbcs, &e_cbcs, &key, &mut as_cbcs, &mut scratch).unwrap();

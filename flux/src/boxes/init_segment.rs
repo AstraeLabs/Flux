@@ -103,7 +103,6 @@ impl<'a> Parse<'a> for MovieHeaderBox {
                 next_track_id: u32::from_be_bytes([bytes[104], bytes[105], bytes[106], bytes[107]]),
             })
         } else {
-
             let need = 120;
             if bytes.len() < need {
                 return Err(Error::BufferTooShort {
@@ -150,7 +149,6 @@ impl<'a> Parse<'a> for MovieHeaderBox {
 impl Serialize for MovieHeaderBox {
     type Error = Error;
     fn serialized_len(&self) -> usize {
-
         if self.version == 0 { 108 } else { 120 }
     }
     fn serialize_into(&self, buf: &mut [u8]) -> Result<usize> {
@@ -687,6 +685,59 @@ impl Serialize for SoundMediaHeaderBox {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct NullMediaHeaderBox {
+    pub version: u8,
+    pub flags: u32,
+}
+
+impl<'a> Parse<'a> for NullMediaHeaderBox {
+    type Error = Error;
+    fn parse(bytes: &'a [u8]) -> Result<Self> {
+        if bytes.len() < 12 {
+            return Err(Error::BufferTooShort {
+                need: 12,
+                have: bytes.len(),
+                what: "nmhd",
+            });
+        }
+        let ver = bytes[8];
+        let flags = u32::from_be_bytes([0, bytes[9], bytes[10], bytes[11]]);
+        Ok(Self {
+            version: ver,
+            flags,
+        })
+    }
+}
+
+impl Serialize for NullMediaHeaderBox {
+    type Error = Error;
+    fn serialized_len(&self) -> usize {
+        BOX_HDR + FULL_HDR
+    }
+    fn serialize_into(&self, buf: &mut [u8]) -> Result<usize> {
+        let need = self.serialized_len();
+        if buf.len() < need {
+            return Err(Error::OutputBufferTooSmall {
+                need,
+                have: buf.len(),
+            });
+        }
+        let mut c = 0usize;
+        buf[c..c + 4].copy_from_slice(&(need as u32).to_be_bytes());
+        c += 4;
+        buf[c..c + 4].copy_from_slice(b"nmhd");
+        c += 4;
+        buf[c] = self.version;
+        c += 1;
+        let fb = self.flags.to_be_bytes();
+        buf[c..c + 3].copy_from_slice(&fb[1..]);
+        c += 3;
+        Ok(c)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct DataReferenceBox {
     pub version: u8,
     pub flags: u32,
@@ -706,7 +757,11 @@ impl<'a> Parse<'a> for DataReferenceBox {
         let ver = bytes[8];
         let flags = u32::from_be_bytes([0, bytes[9], bytes[10], bytes[11]]);
         let count = u32::from_be_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize;
-        let mut entries = Vec::with_capacity(super::bounded_capacity(count, 8, bytes.len().saturating_sub(16)));
+        let mut entries = Vec::with_capacity(super::bounded_capacity(
+            count,
+            8,
+            bytes.len().saturating_sub(16),
+        ));
         let mut off = 16usize;
         for _ in 0..count {
             if off + 8 > bytes.len() {
@@ -859,7 +914,11 @@ impl<'a> Parse<'a> for SampleToChunkBox {
         let ver = bytes[8];
         let flags = u32::from_be_bytes([0, bytes[9], bytes[10], bytes[11]]);
         let count = u32::from_be_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize;
-        let mut entries = Vec::with_capacity(super::bounded_capacity(count, 12, bytes.len().saturating_sub(16)));
+        let mut entries = Vec::with_capacity(super::bounded_capacity(
+            count,
+            12,
+            bytes.len().saturating_sub(16),
+        ));
         let mut off = 16usize;
         for _ in 0..count {
             if off + 12 > bytes.len() {
@@ -1048,7 +1107,11 @@ impl<'a> Parse<'a> for ChunkOffsetBox {
         let ver = bytes[8];
         let flags = u32::from_be_bytes([0, bytes[9], bytes[10], bytes[11]]);
         let count = u32::from_be_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize;
-        let mut entries = Vec::with_capacity(super::bounded_capacity(count, 4, bytes.len().saturating_sub(16)));
+        let mut entries = Vec::with_capacity(super::bounded_capacity(
+            count,
+            4,
+            bytes.len().saturating_sub(16),
+        ));
         let mut off = 16usize;
         for _ in 0..count {
             if off + 4 > bytes.len() {
@@ -1124,7 +1187,11 @@ impl<'a> Parse<'a> for ChunkLargeOffsetBox {
         let ver = bytes[8];
         let flags = u32::from_be_bytes([0, bytes[9], bytes[10], bytes[11]]);
         let count = u32::from_be_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize;
-        let mut entries = Vec::with_capacity(super::bounded_capacity(count, 8, bytes.len().saturating_sub(16)));
+        let mut entries = Vec::with_capacity(super::bounded_capacity(
+            count,
+            8,
+            bytes.len().saturating_sub(16),
+        ));
         let mut off = 16usize;
         for _ in 0..count {
             if off + 8 > bytes.len() {
@@ -1204,7 +1271,11 @@ impl<'a> Parse<'a> for SyncSampleBox {
         let ver = bytes[8];
         let flags = u32::from_be_bytes([0, bytes[9], bytes[10], bytes[11]]);
         let count = u32::from_be_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize;
-        let mut entries = Vec::with_capacity(super::bounded_capacity(count, 4, bytes.len().saturating_sub(16)));
+        let mut entries = Vec::with_capacity(super::bounded_capacity(
+            count,
+            4,
+            bytes.len().saturating_sub(16),
+        ));
         let mut off = 16usize;
         for _ in 0..count {
             if off + 4 > bytes.len() {
@@ -1453,6 +1524,48 @@ impl<'a> Parse<'a> for Ac4SampleEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct MlpaSampleEntry {
+    pub data_reference_index: u16,
+    pub channelcount: u16,
+    pub samplesize: u16,
+    pub samplerate: u32,
+    pub config_boxes: Vec<OpaqueBox>,
+}
+
+impl Serialize for MlpaSampleEntry {
+    type Error = Error;
+    fn serialized_len(&self) -> usize {
+        audio_sample_entry_serialized_len(&self.config_boxes)
+    }
+    fn serialize_into(&self, buf: &mut [u8]) -> Result<usize> {
+        serialize_audio_sample_entry(
+            buf,
+            b"mlpa",
+            self.data_reference_index,
+            self.channelcount,
+            self.samplesize,
+            self.samplerate,
+            &self.config_boxes,
+        )
+    }
+}
+
+impl<'a> Parse<'a> for MlpaSampleEntry {
+    type Error = Error;
+    fn parse(bytes: &'a [u8]) -> Result<Self> {
+        let (dri, chan, samp_sz, sr, config_boxes) = parse_audio_sample_entry(bytes, "mlpa")?;
+        Ok(Self {
+            data_reference_index: dri,
+            channelcount: chan,
+            samplesize: samp_sz,
+            samplerate: sr,
+            config_boxes,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct DtsSampleEntry {
     pub codec_type: [u8; 4],
     pub data_reference_index: u16,
@@ -1675,7 +1788,6 @@ fn serialize_audio_sample_entry(
 impl<'a> Parse<'a> for Mp4aSampleEntry {
     type Error = Error;
     fn parse(bytes: &'a [u8]) -> Result<Self> {
-
         if bytes.len() < 8 + 28 {
             return Err(Error::BufferTooShort {
                 need: 8 + 28,
@@ -1779,6 +1891,7 @@ pub enum SampleEntryVariant {
     Ac4(Box<Ac4SampleEntry>),
     Opus(Box<OpusSampleEntry>),
     Flac(Box<FlacSampleEntry>),
+    Mlpa(Box<MlpaSampleEntry>),
     Mha(Box<MhaSampleEntry>),
     Dts(Box<DtsSampleEntry>),
     Unknown(OpaqueBox),
@@ -1805,7 +1918,11 @@ impl<'a> Parse<'a> for SampleDescriptionBox {
         let ver = bytes[8];
         let flags = u32::from_be_bytes([0, bytes[9], bytes[10], bytes[11]]);
         let count = u32::from_be_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]) as usize;
-        let mut entries = Vec::with_capacity(super::bounded_capacity(count, 8, bytes.len().saturating_sub(16)));
+        let mut entries = Vec::with_capacity(super::bounded_capacity(
+            count,
+            8,
+            bytes.len().saturating_sub(16),
+        ));
         let mut off = 16usize;
         for _ in 0..count {
             if off + 8 > bytes.len() {
@@ -1821,12 +1938,16 @@ impl<'a> Parse<'a> for SampleDescriptionBox {
             let box_bytes = &bytes[off..end];
             let codec = &box_bytes[4..8];
             let entry = match codec {
-                b"avc1" | b"avc3" | b"avc2" | b"avc4" => SampleEntryVariant::Avc1(
-                    crate::sample_entries::AVCSampleEntry::bare_parse(box_bytes)?,
-                ),
-                b"hvc1" | b"hev1" | b"hvc2" | b"hev2" => SampleEntryVariant::Hevc1(
-                    crate::sample_entries::HEVCSampleEntry::bare_parse(box_bytes)?,
-                ),
+                b"avc1" | b"avc3" | b"avc2" | b"avc4" | b"dvav" | b"dva1" => {
+                    SampleEntryVariant::Avc1(crate::sample_entries::AVCSampleEntry::bare_parse(
+                        box_bytes,
+                    )?)
+                }
+                b"hvc1" | b"hev1" | b"hvc2" | b"hev2" | b"dvhe" | b"dvh1" => {
+                    SampleEntryVariant::Hevc1(crate::sample_entries::HEVCSampleEntry::bare_parse(
+                        box_bytes,
+                    )?)
+                }
                 b"vvc1" | b"vvi1" => SampleEntryVariant::Vvc(Box::new(
                     crate::sample_entries::VVCSampleEntry::bare_parse(box_bytes)?,
                 )),
@@ -1847,7 +1968,7 @@ impl<'a> Parse<'a> for SampleDescriptionBox {
                 b"c608" => SampleEntryVariant::C608(Box::new(
                     crate::subtitle_entries::ClosedCaptionSampleEntry::bare_parse(box_bytes)?,
                 )),
-                b"av01" => SampleEntryVariant::Av01(Box::new(
+                b"av01" | b"dav1" => SampleEntryVariant::Av01(Box::new(
                     crate::av1::Av1SampleEntry::parse_entry(box_bytes)?,
                 )),
                 b"vp09" => SampleEntryVariant::Vp09(Box::new(
@@ -1859,10 +1980,11 @@ impl<'a> Parse<'a> for SampleDescriptionBox {
                 b"ac-4" => SampleEntryVariant::Ac4(Box::new(Ac4SampleEntry::parse(box_bytes)?)),
                 b"Opus" => SampleEntryVariant::Opus(Box::new(OpusSampleEntry::parse(box_bytes)?)),
                 b"fLaC" => SampleEntryVariant::Flac(Box::new(FlacSampleEntry::parse(box_bytes)?)),
+                b"mlpa" => SampleEntryVariant::Mlpa(Box::new(MlpaSampleEntry::parse(box_bytes)?)),
                 b"mha1" | b"mha2" | b"mhm1" | b"mhm2" => {
                     SampleEntryVariant::Mha(Box::new(MhaSampleEntry::parse(box_bytes)?))
                 }
-                b"dtsc" | b"dtsh" | b"dtsl" | b"dtse" => {
+                b"dtsc" | b"dtsh" | b"dtsl" | b"dtse" | b"dtsx" | b"dtsy" => {
                     SampleEntryVariant::Dts(Box::new(DtsSampleEntry::parse(box_bytes)?))
                 }
                 _ => {
@@ -1904,6 +2026,7 @@ impl Serialize for SampleDescriptionBox {
                 SampleEntryVariant::Ac4(a) => a.serialized_len(),
                 SampleEntryVariant::Opus(o) => o.serialized_len(),
                 SampleEntryVariant::Flac(f) => f.serialized_len(),
+                SampleEntryVariant::Mlpa(m) => m.serialized_len(),
                 SampleEntryVariant::Mha(m) => m.serialized_len(),
                 SampleEntryVariant::Dts(d) => d.serialized_len(),
                 SampleEntryVariant::Unknown(u) => u.serialized_len(),
@@ -1949,6 +2072,7 @@ impl Serialize for SampleDescriptionBox {
                 SampleEntryVariant::Ac4(a) => a.serialize_into(&mut buf[c..])?,
                 SampleEntryVariant::Opus(o) => o.serialize_into(&mut buf[c..])?,
                 SampleEntryVariant::Flac(f) => f.serialize_into(&mut buf[c..])?,
+                SampleEntryVariant::Mlpa(m) => m.serialize_into(&mut buf[c..])?,
                 SampleEntryVariant::Mha(m) => m.serialize_into(&mut buf[c..])?,
                 SampleEntryVariant::Dts(d) => d.serialize_into(&mut buf[c..])?,
                 SampleEntryVariant::Unknown(u) => u.serialize_into(&mut buf[c..])?,
@@ -1961,7 +2085,6 @@ impl Serialize for SampleDescriptionBox {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct StblOpaque {
-
     pub data: Vec<u8>,
 }
 
@@ -2116,7 +2239,6 @@ pub struct SampleTableBox {
 impl<'a> Parse<'a> for SampleTableBox {
     type Error = Error;
     fn parse(bytes: &'a [u8]) -> Result<Self> {
-
         if bytes.len() < 8 {
             return Err(Error::BufferTooShort {
                 need: 8,
@@ -2241,6 +2363,7 @@ impl Serialize for DataInformationBox {
 pub struct MediaInformationBox {
     pub vmhd: Option<VideoMediaHeaderBox>,
     pub smhd: Option<SoundMediaHeaderBox>,
+    pub nmhd: Option<NullMediaHeaderBox>,
     pub dinf: Option<DataInformationBox>,
     pub stbl: Option<SampleTableBox>,
     pub opaque: Vec<OpaqueBox>,
@@ -2259,6 +2382,7 @@ impl<'a> Parse<'a> for MediaInformationBox {
         let body = &bytes[8..];
         let mut vmhd = None;
         let mut smhd = None;
+        let mut nmhd = None;
         let mut dinf = None;
         let mut stbl = None;
         let mut opaque = Vec::new();
@@ -2274,6 +2398,7 @@ impl<'a> Parse<'a> for MediaInformationBox {
             match &boxtype {
                 b"vmhd" => vmhd = Some(VideoMediaHeaderBox::parse(box_bytes)?),
                 b"smhd" => smhd = Some(SoundMediaHeaderBox::parse(box_bytes)?),
+                b"nmhd" => nmhd = Some(NullMediaHeaderBox::parse(box_bytes)?),
                 b"dinf" => dinf = Some(DataInformationBox::parse(box_bytes)?),
                 b"stbl" => stbl = Some(SampleTableBox::parse(box_bytes)?),
                 _ => {
@@ -2285,6 +2410,7 @@ impl<'a> Parse<'a> for MediaInformationBox {
         Ok(Self {
             vmhd,
             smhd,
+            nmhd,
             dinf,
             stbl,
             opaque,
@@ -2300,6 +2426,9 @@ impl Serialize for MediaInformationBox {
             n += b.serialized_len();
         }
         if let Some(ref b) = self.smhd {
+            n += b.serialized_len();
+        }
+        if let Some(ref b) = self.nmhd {
             n += b.serialized_len();
         }
         if let Some(ref b) = self.dinf {
@@ -2319,6 +2448,9 @@ impl Serialize for MediaInformationBox {
             children_len += b.serialized_len();
         }
         if let Some(ref b) = self.smhd {
+            children_len += b.serialized_len();
+        }
+        if let Some(ref b) = self.nmhd {
             children_len += b.serialized_len();
         }
         if let Some(ref b) = self.dinf {
@@ -2346,6 +2478,9 @@ impl Serialize for MediaInformationBox {
             c += b.serialize_into(&mut buf[c..])?;
         }
         if let Some(ref b) = self.smhd {
+            c += b.serialize_into(&mut buf[c..])?;
+        }
+        if let Some(ref b) = self.nmhd {
             c += b.serialize_into(&mut buf[c..])?;
         }
         if let Some(ref b) = self.dinf {
@@ -2923,6 +3058,7 @@ fn sample_entry_media_kind(entry: &SampleEntryVariant) -> SampleEntryMediaKind {
         | SampleEntryVariant::Ec3(_)
         | SampleEntryVariant::Opus(_)
         | SampleEntryVariant::Flac(_)
+        | SampleEntryVariant::Mlpa(_)
         | SampleEntryVariant::Mha(_)
         | SampleEntryVariant::Dts(_)
         | SampleEntryVariant::Ac4(_) => SampleEntryMediaKind::Audio,
@@ -2951,6 +3087,7 @@ fn sample_entry_bytes(entry: &SampleEntryVariant) -> Result<Vec<u8>> {
         SampleEntryVariant::Ac4(a) => a.serialized_len(),
         SampleEntryVariant::Opus(o) => o.serialized_len(),
         SampleEntryVariant::Flac(f) => f.serialized_len(),
+        SampleEntryVariant::Mlpa(m) => m.serialized_len(),
         SampleEntryVariant::Mha(m) => m.serialized_len(),
         SampleEntryVariant::Dts(d) => d.serialized_len(),
         SampleEntryVariant::Unknown(u) => u.serialized_len(),
@@ -2973,6 +3110,7 @@ fn sample_entry_bytes(entry: &SampleEntryVariant) -> Result<Vec<u8>> {
         SampleEntryVariant::Ac4(a) => a.serialize_into(&mut buf)?,
         SampleEntryVariant::Opus(o) => o.serialize_into(&mut buf)?,
         SampleEntryVariant::Flac(f) => f.serialize_into(&mut buf)?,
+        SampleEntryVariant::Mlpa(m) => m.serialize_into(&mut buf)?,
         SampleEntryVariant::Mha(m) => m.serialize_into(&mut buf)?,
         SampleEntryVariant::Dts(d) => d.serialize_into(&mut buf)?,
         SampleEntryVariant::Unknown(u) => u.serialize_into(&mut buf)?,

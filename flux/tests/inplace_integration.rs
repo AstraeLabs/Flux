@@ -11,13 +11,18 @@ fn unique_temp_dir(stem: &str) -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!("flux-inplace-{}-{stem}-{nanos}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!(
+        "flux-inplace-{}-{stem}-{nanos}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
 
 fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
 }
 
 fn args() -> Args {
@@ -73,7 +78,10 @@ fn concat_chunks(dir: &Path) -> Vec<u8> {
         .map(|e| e.unwrap().file_name().into_string().unwrap())
         .collect();
     names.sort();
-    names.iter().flat_map(|n| std::fs::read(dir.join(n)).unwrap()).collect()
+    names
+        .iter()
+        .flat_map(|n| std::fs::read(dir.join(n)).unwrap())
+        .collect()
 }
 
 fn ffmpeg_audio_packets_md5(path: &Path) -> Option<String> {
@@ -83,9 +91,12 @@ fn ffmpeg_audio_packets_md5(path: &Path) -> Option<String> {
         .args(["-map", "0:a:0", "-c", "copy", "-f", "md5", "-"])
         .output()
         .ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).trim().trim_start_matches("MD5=").to_string())
+    out.status.success().then(|| {
+        String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .trim_start_matches("MD5=")
+            .to_string()
+    })
 }
 
 #[test]
@@ -95,16 +106,35 @@ fn in_place_single_file_keeps_size_and_decrypts() {
     std::fs::copy(fixture("cenc_audio.mp4"), &target).unwrap();
     let before = std::fs::metadata(&target).unwrap().len();
 
-    cli::run(Args { input: Some(target.clone()), in_place: true, ..args() }).expect("in-place decrypt");
+    cli::run(Args {
+        input: Some(target.clone()),
+        in_place: true,
+        ..args()
+    })
+    .expect("in-place decrypt");
 
-    assert_eq!(std::fs::metadata(&target).unwrap().len(), before, "in-place must keep the size");
-    assert_ne!(std::fs::read(&target).unwrap(), std::fs::read(fixture("cenc_audio.mp4")).unwrap());
+    assert_eq!(
+        std::fs::metadata(&target).unwrap().len(),
+        before,
+        "in-place must keep the size"
+    );
+    assert_ne!(
+        std::fs::read(&target).unwrap(),
+        std::fs::read(fixture("cenc_audio.mp4")).unwrap()
+    );
     if let Some(got) = ffmpeg_audio_packets_md5(&target) {
         assert_eq!(got, EXPECTED_AUDIO_PACKETS_MD5);
     }
 
-    let again = cli::run(Args { input: Some(target.clone()), in_place: true, ..args() });
-    assert!(again.is_err(), "a second pass over decrypted data must be refused");
+    let again = cli::run(Args {
+        input: Some(target.clone()),
+        in_place: true,
+        ..args()
+    });
+    assert!(
+        again.is_err(),
+        "a second pass over decrypted data must be refused"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -115,21 +145,40 @@ fn chunks_match_the_single_file_result_in_both_modes() {
     let single = unique_temp_dir("ref");
     let single_file = single.join("a.mp4");
     std::fs::write(&single_file, &original).unwrap();
-    cli::run(Args { input: Some(single_file.clone()), in_place: true, ..args() }).unwrap();
+    cli::run(Args {
+        input: Some(single_file.clone()),
+        in_place: true,
+        ..args()
+    })
+    .unwrap();
     let expected = std::fs::read(&single_file).unwrap();
 
     // --chunks -o
     let chunks = unique_temp_dir("chunks-out");
     write_chunks(&chunks, &original);
     let out = single.join("merged.mp4");
-    cli::run(Args { chunks: Some(chunks.clone()), output: Some(out.clone()), ..args() }).unwrap();
+    cli::run(Args {
+        chunks: Some(chunks.clone()),
+        output: Some(out.clone()),
+        ..args()
+    })
+    .unwrap();
     assert_eq!(std::fs::read(&out).unwrap(), expected, "--chunks -o");
-    assert_eq!(concat_chunks(&chunks), original, "--chunks -o must not touch the chunks");
+    assert_eq!(
+        concat_chunks(&chunks),
+        original,
+        "--chunks -o must not touch the chunks"
+    );
 
     // --chunks --in-place
     let chunks2 = unique_temp_dir("chunks-ip");
     write_chunks(&chunks2, &original);
-    cli::run(Args { chunks: Some(chunks2.clone()), in_place: true, ..args() }).unwrap();
+    cli::run(Args {
+        chunks: Some(chunks2.clone()),
+        in_place: true,
+        ..args()
+    })
+    .unwrap();
     assert_eq!(concat_chunks(&chunks2), expected, "--chunks --in-place");
 
     for d in [single, chunks, chunks2] {
@@ -144,14 +193,26 @@ fn truncated_or_gapped_chunks_are_refused_without_writing() {
     let truncated = unique_temp_dir("trunc");
     write_chunks(&truncated, &original[..original.len() - 100]);
     let before = concat_chunks(&truncated);
-    let res = cli::run(Args { chunks: Some(truncated.clone()), in_place: true, ..args() });
+    let res = cli::run(Args {
+        chunks: Some(truncated.clone()),
+        in_place: true,
+        ..args()
+    });
     assert!(res.is_err(), "a truncated download must be refused");
-    assert_eq!(concat_chunks(&truncated), before, "a refused run must not modify the chunks");
+    assert_eq!(
+        concat_chunks(&truncated),
+        before,
+        "a refused run must not modify the chunks"
+    );
 
     let gapped = unique_temp_dir("gap");
     write_chunks(&gapped, &original);
     std::fs::remove_file(gapped.join("seg_00001.mp4")).unwrap();
-    let res = cli::run(Args { chunks: Some(gapped.clone()), in_place: true, ..args() });
+    let res = cli::run(Args {
+        chunks: Some(gapped.clone()),
+        in_place: true,
+        ..args()
+    });
     assert!(res.is_err(), "a gap in the numbering must be refused");
 
     for d in [truncated, gapped] {
@@ -160,7 +221,10 @@ fn truncated_or_gapped_chunks_are_refused_without_writing() {
 }
 
 fn ffmpeg_available() -> bool {
-    Command::new("ffmpeg").arg("-version").output().is_ok_and(|o| o.status.success())
+    Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .is_ok_and(|o| o.status.success())
 }
 
 #[test]
@@ -184,10 +248,18 @@ fn wrong_key_on_aac_audio_is_refused_before_anything_is_written() {
         Err(cli::CliError::KeySanityCheckFailed { .. }) => {}
         other => panic!("expected KeySanityCheckFailed, got {other:?}"),
     }
-    assert_eq!(std::fs::read(&target).unwrap(), before, "a refused run must not modify the file");
+    assert_eq!(
+        std::fs::read(&target).unwrap(),
+        before,
+        "a refused run must not modify the file"
+    );
 
-    cli::run(Args { input: Some(target.clone()), in_place: true, ..args() })
-        .expect("the right key must pass the AAC check");
+    cli::run(Args {
+        input: Some(target.clone()),
+        in_place: true,
+        ..args()
+    })
+    .expect("the right key must pass the AAC check");
     let _ = std::fs::remove_dir_all(&dir);
 }
 #[test]
@@ -206,7 +278,11 @@ fn iv_in_mdat_fragments_are_refused_with_the_file_untouched() {
     std::fs::write(&target, &bytes).unwrap();
     let before = bytes;
 
-    let res = cli::run(Args { input: Some(target.clone()), in_place: true, ..args() });
+    let res = cli::run(Args {
+        input: Some(target.clone()),
+        in_place: true,
+        ..args()
+    });
     let err = res.expect_err("IV-in-mdat must be refused").to_string();
     assert!(err.contains("IVs in mdat"), "unexpected error: {err}");
     assert_eq!(std::fs::read(&target).unwrap(), before);
@@ -261,7 +337,9 @@ fn tfdt_all(data: &[u8]) -> Vec<(usize, usize)> {
 fn read_tfdt(data: &[u8], value_off: usize, width: usize) -> u64 {
     match width {
         8 => u64::from_be_bytes(data[value_off..value_off + 8].try_into().unwrap()),
-        _ => u64::from(u32::from_be_bytes(data[value_off..value_off + 4].try_into().unwrap())),
+        _ => u64::from(u32::from_be_bytes(
+            data[value_off..value_off + 4].try_into().unwrap(),
+        )),
     }
 }
 
@@ -278,7 +356,10 @@ fn patch_tfdt(data: &mut [u8], value_off: usize, width: usize, new_value: u64) {
 fn tfdt_rebase_output_matches_the_python_semantics() {
     let mut original = std::fs::read(fixture("cenc_audio.mp4")).unwrap();
     let original_tfdt = tfdt_all(&original);
-    assert!(!original_tfdt.is_empty(), "the fixture must carry tfdt boxes");
+    assert!(
+        !original_tfdt.is_empty(),
+        "the fixture must carry tfdt boxes"
+    );
     // The fixture starts at tfdt 0, which would make the rebase an identity. Shift every tfdt by an
     // absolute, live-stream-like offset (tfdt sits in the clear moof, outside the encrypted samples).
     for &(off, width) in &original_tfdt {
@@ -304,7 +385,10 @@ fn tfdt_rebase_output_matches_the_python_semantics() {
     .expect("plain --chunks -o decrypt");
     let mut reference = std::fs::read(&ref_file).unwrap();
     let all = tfdt_all(&reference);
-    assert!(all.len() >= original_tfdt.len().min(1), "decrypted fMP4 must keep its tfdt boxes");
+    assert!(
+        all.len() >= original_tfdt.len().min(1),
+        "decrypted fMP4 must keep its tfdt boxes"
+    );
     let (first_off, first_width) = all[0];
     let base = read_tfdt(&reference, first_off, first_width);
     for (value_off, width) in all {
@@ -329,7 +413,11 @@ fn tfdt_rebase_output_matches_the_python_semantics() {
         reference,
         "--tfdt-rebase output must equal plain decrypt + Python rebase arithmetic"
     );
-    assert_eq!(concat_chunks(&chunks), original, "the chunks must never be touched");
+    assert_eq!(
+        concat_chunks(&chunks),
+        original,
+        "the chunks must never be touched"
+    );
 
     // --chunks --in-place --tfdt-rebase writes the same rebased bytes where they are.
     write_chunks(&chunks, &original);
@@ -340,7 +428,11 @@ fn tfdt_rebase_output_matches_the_python_semantics() {
         ..args()
     })
     .expect("--chunks --in-place --tfdt-rebase decrypt");
-    assert_eq!(concat_chunks(&chunks), reference, "in-place rebase must rewrite tfdt where it is");
+    assert_eq!(
+        concat_chunks(&chunks),
+        reference,
+        "in-place rebase must rewrite tfdt where it is"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -354,8 +446,12 @@ fn flux_bin() -> Command {
 #[test]
 fn stdout_is_refused_on_a_terminal() {
     assert!(flux::cli::ensure_stdout_is_not_a_terminal(false).is_ok());
-    let err = flux::cli::ensure_stdout_is_not_a_terminal(true).expect_err("a terminal must be refused");
-    assert!(err.to_string().contains("terminal"), "unexpected message: {err}");
+    let err =
+        flux::cli::ensure_stdout_is_not_a_terminal(true).expect_err("a terminal must be refused");
+    assert!(
+        err.to_string().contains("terminal"),
+        "unexpected message: {err}"
+    );
 }
 
 #[test]
@@ -376,7 +472,11 @@ fn stdout_pipe_carries_exactly_the_bytes_of_the_file_output() {
             .args(extra)
             .output()
             .unwrap();
-        assert!(status.status.success(), "file mode failed: {}", String::from_utf8_lossy(&status.stderr));
+        assert!(
+            status.status.success(),
+            "file mode failed: {}",
+            String::from_utf8_lossy(&status.stderr)
+        );
 
         // Output::stdout is a pipe: this is the same situation as `flux ... | ffmpeg -i -`.
         let piped = flux_bin()
@@ -386,10 +486,21 @@ fn stdout_pipe_carries_exactly_the_bytes_of_the_file_output() {
             .args(extra)
             .output()
             .unwrap();
-        assert!(piped.status.success(), "stdout mode failed: {}", String::from_utf8_lossy(&piped.stderr));
-        assert_eq!(piped.stdout, std::fs::read(&file_out).unwrap(), "-o - must equal -o FILE ({extra:?})");
+        assert!(
+            piped.status.success(),
+            "stdout mode failed: {}",
+            String::from_utf8_lossy(&piped.stderr)
+        );
+        assert_eq!(
+            piped.stdout,
+            std::fs::read(&file_out).unwrap(),
+            "-o - must equal -o FILE ({extra:?})"
+        );
     }
-    assert_eq!(concat_chunks(&chunks), std::fs::read(fixture("cenc_audio.mp4")).unwrap());
+    assert_eq!(
+        concat_chunks(&chunks),
+        std::fs::read(fixture("cenc_audio.mp4")).unwrap()
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -401,9 +512,17 @@ fn stdout_mode_prints_nothing_but_media_on_stdout_when_it_fails() {
     let original = std::fs::read(fixture("cenc_audio.mp4")).unwrap();
     write_chunks(&chunks, &original[..original.len() - 100]);
 
-    let piped = flux_bin().args(["--no-profile", "--chunks"]).arg(&chunks).args(["-o", "-", "--key", KEY]).output().unwrap();
+    let piped = flux_bin()
+        .args(["--no-profile", "--chunks"])
+        .arg(&chunks)
+        .args(["-o", "-", "--key", KEY])
+        .output()
+        .unwrap();
     assert!(!piped.status.success(), "a truncated input must fail");
-    assert!(piped.stdout.is_empty(), "a refused run must not emit partial media on stdout");
+    assert!(
+        piped.stdout.is_empty(),
+        "a refused run must not emit partial media on stdout"
+    );
     assert!(!piped.stderr.is_empty(), "the reason must be on stderr");
     let _ = std::fs::remove_dir_all(&dir);
 }

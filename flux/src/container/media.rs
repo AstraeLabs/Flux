@@ -288,6 +288,12 @@ fn codec_config_from_entry(entry: &SampleEntryVariant) -> Result<CodecConfig> {
                 config: avc.config.clone(),
                 width,
                 height,
+                codec_fourcc: avc.codec_type,
+                extra_boxes: avc
+                    .extra_boxes
+                    .iter()
+                    .map(|b| crate::init_segment::OpaqueBox::new(b.box_type, b.data.clone()))
+                    .collect(),
             })
         }
         SampleEntryVariant::Hevc1(hevc) => {
@@ -303,6 +309,12 @@ fn codec_config_from_entry(entry: &SampleEntryVariant) -> Result<CodecConfig> {
                 config: hevc.config.clone(),
                 width,
                 height,
+                codec_fourcc: hevc.codec_type,
+                extra_boxes: hevc
+                    .extra_boxes
+                    .iter()
+                    .map(|b| crate::init_segment::OpaqueBox::new(b.box_type, b.data.clone()))
+                    .collect(),
             })
         }
         SampleEntryVariant::Vvc(vvc) => {
@@ -409,8 +421,22 @@ fn codec_config_from_entry(entry: &SampleEntryVariant) -> Result<CodecConfig> {
                 sample_size: flac.samplesize,
             })
         }
+        SampleEntryVariant::Mlpa(mlpa) => {
+            let config = crate::codec::mlp::MlpSpecificBox::parse(config_box_body(
+                &mlpa.config_boxes,
+                b"dmlp",
+            )?)?;
+            Ok(CodecConfig::TrueHd {
+                config,
+                channel_count: mlpa.channelcount,
+                sample_rate: mlpa.samplerate >> 16,
+                sample_size: mlpa.samplesize,
+            })
+        }
         SampleEntryVariant::Dts(dts) => {
-            let config = DtsSpecificBox::parse(config_box_body(&dts.config_boxes, b"ddts")?)?;
+            let body = config_box_body(&dts.config_boxes, b"ddts")
+                .or_else(|_| config_box_body(&dts.config_boxes, b"udts"))?;
+            let config = DtsSpecificBox::parse(body)?;
             Ok(CodecConfig::Dts {
                 config,
                 codec_fourcc: dts.codec_type,

@@ -17,7 +17,6 @@ pub const FULLBOX_EXTRA_SIZE: usize = 4;
 pub struct BoxType(pub [u8; 4]);
 
 impl BoxType {
-
     pub const fn from_bytes(b: [u8; 4]) -> Self {
         Self(b)
     }
@@ -35,7 +34,6 @@ impl BoxType {
     }
 
     pub fn name(&self) -> &'static str {
-
         match &self.0 {
             b"ftyp" => "ftyp",
             b"moov" => "moov",
@@ -119,7 +117,6 @@ pub struct BoxHeader {
 }
 
 impl BoxHeader {
-
     pub fn header_size(&self) -> usize {
         let mut sz = BOX_HEADER_MIN_SIZE;
         if self.has_largesize {
@@ -232,7 +229,6 @@ impl Serialize for BoxHeader {
 
         let mut cursor = 0usize;
         if self.size > u32::MAX as u64 {
-
             buf[0..4].copy_from_slice(&SIZE_INDICATES_LARGESIZE.to_be_bytes());
             cursor += 4;
             buf[cursor..cursor + 4].copy_from_slice(&self.box_type.to_u32().to_be_bytes());
@@ -245,9 +241,7 @@ impl Serialize for BoxHeader {
             cursor += 4;
             buf[cursor..cursor + 4].copy_from_slice(&self.box_type.to_u32().to_be_bytes());
             cursor += 4;
-            if size32 == SIZE_INDICATES_LARGESIZE {
-
-            }
+            if size32 == SIZE_INDICATES_LARGESIZE {}
         }
 
         if self.box_type.is(b"uuid")
@@ -270,7 +264,6 @@ pub struct FullBoxHeader {
 }
 
 impl FullBoxHeader {
-
     pub fn new(box_header: BoxHeader, version: u8, flags: u32) -> Self {
         debug_assert!(flags <= 0xFFFFFF, "flags must fit in 24 bits");
         Self {
@@ -337,7 +330,6 @@ impl Serialize for FullBoxHeader {
 
 #[derive(Debug, Clone, Copy)]
 pub struct BoxRef<'a> {
-
     pub header: BoxHeader,
 
     pub body: &'a [u8],
@@ -348,7 +340,6 @@ pub fn parse_box<'a>(bytes: &'a [u8]) -> Result<(BoxRef<'a>, usize)> {
     let hdr_sz = header.header_size();
 
     let body: &'a [u8] = if header.size == SIZE_TO_EOF as u64 {
-
         &bytes[hdr_sz..]
     } else {
         let total = header.size as usize;
@@ -383,7 +374,6 @@ pub struct BoxIter<'a> {
 }
 
 impl<'a> BoxIter<'a> {
-
     pub fn new(data: &'a [u8]) -> Self {
         Self { remaining: data }
     }
@@ -403,7 +393,6 @@ impl<'a> Iterator for BoxIter<'a> {
                 Some(Ok((box_ref, consumed)))
             }
             Err(e) => {
-
                 self.remaining = &[];
                 Some(Err(e))
             }

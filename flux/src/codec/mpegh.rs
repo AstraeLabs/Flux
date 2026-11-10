@@ -1,4 +1,4 @@
-//! MPEG-H 3D Audio in ISOBMFF — `mha1`/`mhm1` + `mhaC` 
+//! MPEG-H 3D Audio in ISOBMFF — `mha1`/`mhm1` + `mhaC`
 
 use crate::error::{Error, Result};
 use alloc::vec::Vec;

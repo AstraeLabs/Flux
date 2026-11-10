@@ -10,12 +10,10 @@ pub const AC4_FOURCC: [u8; 4] = *b"ac-4";
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Ac4SpecificBox {
-
     pub ac4_dsi: Vec<u8>,
 }
 
 impl Ac4SpecificBox {
-
     pub fn new(ac4_dsi: Vec<u8>) -> Self {
         Self { ac4_dsi }
     }

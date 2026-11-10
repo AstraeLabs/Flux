@@ -24,7 +24,6 @@ impl Ac3SpecificBox {
 impl<'a> Parse<'a> for Ac3SpecificBox {
     type Error = Error;
     fn parse(bytes: &'a [u8]) -> Result<Self> {
-
         if bytes.len() < 3 {
             return Err(Error::BufferTooShort {
                 need: 3,
@@ -108,7 +107,6 @@ impl Ec3SpecificBox {
 }
 
 fn ec3_substream_serialized_len(_sub: &Ec3Substream) -> usize {
-
     3
 }
 
@@ -186,7 +184,6 @@ impl<'a> Parse<'a> for Ec3SpecificBox {
 impl Serialize for Ec3SpecificBox {
     type Error = Error;
     fn serialized_len(&self) -> usize {
-
         2 + self
             .substreams
             .iter()

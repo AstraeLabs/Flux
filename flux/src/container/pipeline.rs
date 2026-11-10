@@ -15,9 +15,9 @@ use crate::init_segment::{
     Ac3SampleEntry, Ac4SampleEntry, ChunkOffsetBox, DataEntryUrlBox, DataInformationBox,
     DataReferenceBox, DtsSampleEntry, Ec3SampleEntry, FlacSampleEntry, HandlerBox, MediaBox,
     MediaHeaderBox, MediaInformationBox, MhaSampleEntry, MovieBox, MovieExtendsBox, MovieHeaderBox,
-    Mp4aSampleEntry, OpaqueBox, OpusSampleEntry, SampleDescriptionBox, SampleEntryVariant,
-    SampleSizeBox, SampleTableBox, SampleToChunkBox, SoundMediaHeaderBox, StblChild, TrackBox,
-    TrackExtendsBox, TrackHeaderBox, VideoMediaHeaderBox,
+    Mp4aSampleEntry, OpaqueBox, OpusSampleEntry, SampleDescriptionBox,
+    SampleEntryVariant, SampleSizeBox, SampleTableBox, SampleToChunkBox, SoundMediaHeaderBox,
+    StblChild, TrackBox, TrackExtendsBox, TrackHeaderBox, VideoMediaHeaderBox,
 };
 use crate::mpegh::MHAC_FOURCC;
 use crate::opus::DOPS_FOURCC;
@@ -48,7 +48,9 @@ pub fn build_init_segment(tracks: &[TrackSpec], movie_timescale: u32) -> Result<
         .max()
         .unwrap_or(0)
         .checked_add(1)
-        .ok_or(crate::error::Error::InvalidInput("track_id u32::MAX leaves no next_track_id"))?;
+        .ok_or(crate::error::Error::InvalidInput(
+            "track_id u32::MAX leaves no next_track_id",
+        ))?;
     let mvhd = MovieHeaderBox {
         version: 0,
         flags: 0,
@@ -99,10 +101,7 @@ pub fn build_init_segment(tracks: &[TrackSpec], movie_timescale: u32) -> Result<
 
 fn unmuxable_track_error(t: &TrackSpec) -> crate::error::Error {
     match &t.config {
-        CodecConfig::Subtitle { format } => crate::error::Error::UnmuxableSubtitleTrack {
-            track_id: t.track_id,
-            format: *format,
-        },
+        CodecConfig::Vorbis { .. } => crate::error::Error::UnsupportedCodec { codec: "Vorbis" },
         _ => crate::error::Error::InvalidInput("track is not muxable in BMFF"),
     }
 }
@@ -120,11 +119,14 @@ fn config_box<C: Serialize<Error = crate::error::Error>>(
 fn build_trak(t: &TrackSpec) -> Result<TrackBox> {
     let audio = t.config.is_audio();
 
-    let (stsd_entry, vmhd, smhd, handler_type, handler_name, tkhd_w, tkhd_h) = match &t.config {
+    let (stsd_entry, vmhd, smhd, nmhd, handler_type, handler_name, tkhd_w, tkhd_h) = match &t.config
+    {
         CodecConfig::Avc {
             config,
             width,
             height,
+            codec_fourcc,
+            extra_boxes,
         } => {
             let visual = VisualSampleEntryFields {
                 data_reference_index: 1,
@@ -133,10 +135,16 @@ fn build_trak(t: &TrackSpec) -> Result<TrackBox> {
                 ..VisualSampleEntryFields::default()
             };
             let entry = SampleEntryVariant::Avc1(AVCSampleEntry {
-                codec_type: *b"avc1",
+                codec_type: *codec_fourcc,
                 visual,
                 config: config.clone(),
-                extra_boxes: vec![],
+                extra_boxes: extra_boxes
+                    .iter()
+                    .map(|b| crate::boxes::sample_entries::OpaqueBox {
+                        box_type: b.box_type,
+                        data: b.data.clone(),
+                    })
+                    .collect(),
             });
             (
                 entry,
@@ -146,6 +154,7 @@ fn build_trak(t: &TrackSpec) -> Result<TrackBox> {
                     graphicsmode: 0,
                     opcolor: [0, 0, 0],
                 }),
+                None,
                 None,
                 *b"vide",
                 b"VideoHandler\0".to_vec(),
@@ -157,6 +166,8 @@ fn build_trak(t: &TrackSpec) -> Result<TrackBox> {
             config,
             width,
             height,
+            codec_fourcc,
+            extra_boxes,
         } => {
             let visual = VisualSampleEntryFields {
                 data_reference_index: 1,
@@ -165,10 +176,16 @@ fn build_trak(t: &TrackSpec) -> Result<TrackBox> {
                 ..VisualSampleEntryFields::default()
             };
             let entry = SampleEntryVariant::Hevc1(HEVCSampleEntry {
-                codec_type: *b"hvc1",
+                codec_type: *codec_fourcc,
                 visual,
                 config: config.clone(),
-                extra_boxes: vec![],
+                extra_boxes: extra_boxes
+                    .iter()
+                    .map(|b| crate::boxes::sample_entries::OpaqueBox {
+                        box_type: b.box_type,
+                        data: b.data.clone(),
+                    })
+                    .collect(),
             });
             (
                 entry,
@@ -178,6 +195,7 @@ fn build_trak(t: &TrackSpec) -> Result<TrackBox> {
                     graphicsmode: 0,
                     opcolor: [0, 0, 0],
                 }),
+                None,
                 None,
                 *b"vide",
                 b"VideoHandler\0".to_vec(),
@@ -211,6 +229,7 @@ fn build_trak(t: &TrackSpec) -> Result<TrackBox> {
                     opcolor: [0, 0, 0],
                 }),
                 None,
+                None,
                 *b"vide",
                 b"VideoHandler\0".to_vec(),
                 (*width as u32) << 16,
@@ -241,6 +260,7 @@ fn build_trak(t: &TrackSpec) -> Result<TrackBox> {
                     flags: 0,
                     balance: 0,
                 }),
+                None,
                 *b"soun",
                 b"SoundHandler\0".to_vec(),
                 0,
@@ -272,6 +292,7 @@ fn build_trak(t: &TrackSpec) -> Result<TrackBox> {
                     flags: 0,
                     balance: 0,
                 }),
+                None,
                 *b"soun",
                 b"SoundHandler\0".to_vec(),
                 0,
@@ -303,6 +324,7 @@ fn build_trak(t: &TrackSpec) -> Result<TrackBox> {
                     flags: 0,
                     balance: 0,
                 }),
+                None,
                 *b"soun",
                 b"SoundHandler\0".to_vec(),
                 0,
@@ -334,6 +356,7 @@ fn build_trak(t: &TrackSpec) -> Result<TrackBox> {
                     flags: 0,
                     balance: 0,
                 }),
+                None,
                 *b"soun",
                 b"SoundHandler\0".to_vec(),
                 0,
@@ -363,6 +386,7 @@ fn build_trak(t: &TrackSpec) -> Result<TrackBox> {
                     graphicsmode: 0,
                     opcolor: [0, 0, 0],
                 }),
+                None,
                 None,
                 *b"vide",
                 b"VideoHandler\0".to_vec(),
@@ -394,6 +418,7 @@ fn build_trak(t: &TrackSpec) -> Result<TrackBox> {
                     opcolor: [0, 0, 0],
                 }),
                 None,
+                None,
                 *b"vide",
                 b"VideoHandler\0".to_vec(),
                 (*width as u32) << 16,
@@ -422,6 +447,7 @@ fn build_trak(t: &TrackSpec) -> Result<TrackBox> {
                     flags: 0,
                     balance: 0,
                 }),
+                None,
                 *b"soun",
                 b"SoundHandler\0".to_vec(),
                 0,
@@ -450,6 +476,7 @@ fn build_trak(t: &TrackSpec) -> Result<TrackBox> {
                     flags: 0,
                     balance: 0,
                 }),
+                None,
                 *b"soun",
                 b"SoundHandler\0".to_vec(),
                 0,
@@ -478,6 +505,7 @@ fn build_trak(t: &TrackSpec) -> Result<TrackBox> {
                     flags: 0,
                     balance: 0,
                 }),
+                None,
                 *b"soun",
                 b"SoundHandler\0".to_vec(),
                 0,
@@ -507,6 +535,7 @@ fn build_trak(t: &TrackSpec) -> Result<TrackBox> {
                     flags: 0,
                     balance: 0,
                 }),
+                None,
                 *b"soun",
                 b"SoundHandler\0".to_vec(),
                 0,
@@ -540,6 +569,7 @@ fn build_trak(t: &TrackSpec) -> Result<TrackBox> {
                     opcolor: [0, 0, 0],
                 }),
                 None,
+                None,
                 *b"vide",
                 b"VideoHandler\0".to_vec(),
                 (*width as u32) << 16,
@@ -571,6 +601,7 @@ fn build_trak(t: &TrackSpec) -> Result<TrackBox> {
                     flags: 0,
                     balance: 0,
                 }),
+                None,
                 *b"soun",
                 b"SoundHandler\0".to_vec(),
                 0,
@@ -601,6 +632,7 @@ fn build_trak(t: &TrackSpec) -> Result<TrackBox> {
                     flags: 0,
                     balance: 0,
                 }),
+                None,
                 *b"soun",
                 b"SoundHandler\0".to_vec(),
                 0,
@@ -631,6 +663,7 @@ fn build_trak(t: &TrackSpec) -> Result<TrackBox> {
                     flags: 0,
                     balance: 0,
                 }),
+                None,
                 *b"soun",
                 b"SoundHandler\0".to_vec(),
                 0,
@@ -639,12 +672,18 @@ fn build_trak(t: &TrackSpec) -> Result<TrackBox> {
         }
         CodecConfig::TrueHd {
             config,
-            channel_count: _,
-            sample_rate: _,
-            sample_size: _,
+            channel_count,
+            sample_rate,
+            sample_size,
         } => {
-            let mlpa_opaque = config_box(b"mlpa", config)?;
-            let entry = SampleEntryVariant::Unknown(mlpa_opaque);
+            let dmlp_opaque = config_box(b"dmlp", config)?;
+            let entry = SampleEntryVariant::Mlpa(Box::new(crate::init_segment::MlpaSampleEntry {
+                data_reference_index: 1,
+                channelcount: *channel_count,
+                samplesize: *sample_size,
+                samplerate: (*sample_rate) << 16,
+                config_boxes: vec![dmlp_opaque],
+            }));
             (
                 entry,
                 None,
@@ -653,6 +692,7 @@ fn build_trak(t: &TrackSpec) -> Result<TrackBox> {
                     flags: 0,
                     balance: 0,
                 }),
+                None,
                 *b"soun",
                 b"SoundHandler\0".to_vec(),
                 0,
@@ -683,6 +723,7 @@ fn build_trak(t: &TrackSpec) -> Result<TrackBox> {
                     opcolor: [0, 0, 0],
                 }),
                 None,
+                None,
                 *b"vide",
                 b"VideoHandler\0".to_vec(),
                 (*width as u32) << 16,
@@ -692,8 +733,44 @@ fn build_trak(t: &TrackSpec) -> Result<TrackBox> {
         CodecConfig::Vorbis { .. } => {
             return Err(crate::error::Error::UnsupportedCodec { codec: "Vorbis" });
         }
-        CodecConfig::Subtitle { .. } => {
-            return Err(crate::error::Error::UnsupportedCodec { codec: "Subtitle" });
+        CodecConfig::Subtitle { format } => {
+            let (entry, handler_type, handler_name): (SampleEntryVariant, [u8; 4], Vec<u8>) =
+                match format {
+                    crate::pipeline::SubtitleFormat::Ttml => (
+                        SampleEntryVariant::Stpp(Box::new(
+                            crate::subtitle_entries::XmlSubtitleSampleEntry::new(""),
+                        )),
+                        *b"subt",
+                        b"SubtitleHandler\0".to_vec(),
+                    ),
+                    crate::pipeline::SubtitleFormat::WebVtt => (
+                        SampleEntryVariant::Wvtt(Box::new(
+                            crate::subtitle_entries::WvttSampleEntry::new(""),
+                        )),
+                        *b"text",
+                        b"SubtitleHandler\0".to_vec(),
+                    ),
+                    crate::pipeline::SubtitleFormat::Cea608 => (
+                        SampleEntryVariant::C608(Box::new(
+                            crate::subtitle_entries::ClosedCaptionSampleEntry::default(),
+                        )),
+                        *b"subt",
+                        b"SubtitleHandler\0".to_vec(),
+                    ),
+                };
+            (
+                entry,
+                None,
+                None,
+                Some(crate::init_segment::NullMediaHeaderBox {
+                    version: 0,
+                    flags: 0,
+                }),
+                handler_type,
+                handler_name,
+                0,
+                0,
+            )
         }
     };
 
@@ -744,6 +821,7 @@ fn build_trak(t: &TrackSpec) -> Result<TrackBox> {
     let minf = MediaInformationBox {
         vmhd,
         smhd,
+        nmhd,
         dinf: Some(dinf),
         stbl: Some(stbl),
         opaque: vec![],
@@ -788,10 +866,13 @@ fn build_trak(t: &TrackSpec) -> Result<TrackBox> {
         height: tkhd_h,
     };
 
-    let edts = t.edit_list.as_ref().map(|elst| crate::init_segment::EditBox {
-        elst: Some(elst.clone()),
-        opaque: vec![],
-    });
+    let edts = t
+        .edit_list
+        .as_ref()
+        .map(|elst| crate::init_segment::EditBox {
+            elst: Some(elst.clone()),
+            opaque: vec![],
+        });
 
     Ok(TrackBox {
         tkhd,
@@ -804,23 +885,33 @@ fn build_trak(t: &TrackSpec) -> Result<TrackBox> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AVCConfigurationBox, AVCDecoderConfigurationRecord};
     use crate::timing::{EditListBox, EditListEntry};
+    use crate::{AVCConfigurationBox, AVCDecoderConfigurationRecord};
 
     fn minimal_avc_config() -> AVCConfigurationBox {
         AVCConfigurationBox::new(AVCDecoderConfigurationRecord {
             configuration_version: 1,
-            profile_indication: 0x64,
+            profile_indication: 66,
             profile_compatibility: 0,
-            level_indication: 0x1f,
+            level_indication: 30,
             length_size_minus_one: 3,
-            sps: vec![],
-            pps: vec![],
+            sps: vec![crate::nalu_types::AvcSps(vec![0x67, 0x42, 0x00, 0x1E])],
+            pps: vec![crate::nalu_types::AvcPps(vec![0x68, 0xCE, 0x3C, 0x80])],
             chroma_format: None,
             bit_depth_luma_minus8: None,
             bit_depth_chroma_minus8: None,
-            sps_ext: vec![],
+            sps_ext: Vec::new(),
         })
+    }
+
+    fn minimal_avc_codec(width: u16, height: u16) -> CodecConfig {
+        CodecConfig::Avc {
+            config: minimal_avc_config(),
+            width,
+            height,
+            codec_fourcc: *b"avc1",
+            extra_boxes: Vec::new(),
+        }
     }
 
     fn edit_list_with_leading_trim() -> EditListBox {
@@ -838,15 +929,7 @@ mod tests {
 
     #[test]
     fn build_trak_carries_the_source_edit_list_onto_a_video_track() {
-        let mut spec = TrackSpec::new(
-            1,
-            30000,
-            CodecConfig::Avc {
-                config: minimal_avc_config(),
-                width: 640,
-                height: 360,
-            },
-        );
+        let mut spec = TrackSpec::new(1, 30000, minimal_avc_codec(640, 360));
         let source_elst = edit_list_with_leading_trim();
         spec.edit_list = Some(source_elst.clone());
 
@@ -857,21 +940,19 @@ mod tests {
             .as_ref()
             .and_then(|e| e.elst.as_ref())
             .expect("video track must carry the source edit list into edts/elst");
-        assert_eq!(got, &source_elst, "carried edit list must match the source verbatim");
+        assert_eq!(
+            got, &source_elst,
+            "carried edit list must match the source verbatim"
+        );
     }
 
     #[test]
     fn build_trak_omits_edts_when_the_source_has_no_edit_list() {
-        let spec = TrackSpec::new(
-            1,
-            30000,
-            CodecConfig::Avc {
-                config: minimal_avc_config(),
-                width: 640,
-                height: 360,
-            },
-        );
+        let spec = TrackSpec::new(1, 30000, minimal_avc_codec(640, 360));
         let trak = build_trak(&spec).expect("build_trak must succeed on a minimal AVC spec");
-        assert!(trak.edts.is_none(), "no source edit list means no edts in the output");
+        assert!(
+            trak.edts.is_none(),
+            "no source edit list means no edts in the output"
+        );
     }
 }

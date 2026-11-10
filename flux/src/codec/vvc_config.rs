@@ -152,7 +152,6 @@ impl VvcDecoderConfigurationRecord {
         let info = crate::sps::decode_vvc_sps(sps).ok()?;
         Some((info.width as u16, info.height as u16))
     }
-
 }
 
 impl<'a> Parse<'a> for VvcDecoderConfigurationRecord {
@@ -710,7 +709,10 @@ mod tests {
 
         let parsed = VvcDecoderConfigurationRecord::parse(&buf).unwrap();
         assert_eq!(parsed, record);
-        assert_eq!(parsed.ptl.unwrap().general_constraint_info.len(), 94usize.div_ceil(8));
+        assert_eq!(
+            parsed.ptl.unwrap().general_constraint_info.len(),
+            94usize.div_ceil(8)
+        );
     }
 
     #[test]

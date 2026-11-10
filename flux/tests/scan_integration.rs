@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
 }
 
 struct Daemon {
@@ -35,7 +37,11 @@ impl Daemon {
     fn scan(&mut self, input: &Path) -> serde_json::Value {
         let job = serde_json::json!({"scan": input.to_string_lossy()}).to_string();
         writeln!(self.stdin, "{job}").expect("daemon stdin write");
-        let line = self.lines.next().expect("daemon stdout EOF").expect("daemon stdout read");
+        let line = self
+            .lines
+            .next()
+            .expect("daemon stdout EOF")
+            .expect("daemon stdout read");
         serde_json::from_str(&line).expect("daemon scan response must be valid JSON")
     }
 }
@@ -58,7 +64,10 @@ fn scan_reports_senc_fragments_without_moov_or_keys() {
     let clear = tracks[0]["clear_fragments"].as_u64().expect("u64");
     assert!(enc > 0, "every fragment carries senc: {report}");
     assert_eq!(clear, 0);
-    assert!(report["scan_cut"].as_u64().is_some(), "cut must exist: {report}");
+    assert!(
+        report["scan_cut"].as_u64().is_some(),
+        "cut must exist: {report}"
+    );
 }
 
 #[test]
@@ -68,13 +77,22 @@ fn scan_reports_saiz_saio_and_piff_uuid_styles() {
     assert_eq!(report["ok"], true, "scan must succeed: {report}");
     let tracks = report["tracks"].as_array().expect("tracks array");
     assert!(!tracks.is_empty(), "at least one track: {report}");
-    let enc: u64 = tracks.iter().map(|t| t["encrypted_fragments"].as_u64().unwrap_or(0)).sum();
-    assert!(enc > 0, "piff uuid fragments must report encrypted: {report}");
+    let enc: u64 = tracks
+        .iter()
+        .map(|t| t["encrypted_fragments"].as_u64().unwrap_or(0))
+        .sum();
+    assert!(
+        enc > 0,
+        "piff uuid fragments must report encrypted: {report}"
+    );
 
     let report = daemon.scan(&fixture("enc_saiz_saio.mp4"));
     assert_eq!(report["ok"], true, "scan must succeed: {report}");
     assert!(
-        report["tracks"].as_array().expect("tracks array").is_empty(),
+        report["tracks"]
+            .as_array()
+            .expect("tracks array")
+            .is_empty(),
         "progressive input has no moof: {report}"
     );
 }
@@ -113,8 +131,15 @@ fn decrypt_jobs_still_work_after_scan_jobs() {
     })
     .to_string();
     writeln!(daemon.stdin, "{job}").expect("daemon stdin write");
-    let line = daemon.lines.next().expect("daemon stdout EOF").expect("daemon stdout read");
+    let line = daemon
+        .lines
+        .next()
+        .expect("daemon stdout EOF")
+        .expect("daemon stdout read");
     let decrypt_report: serde_json::Value = serde_json::from_str(&line).expect("valid JSON");
     std::fs::remove_file(&out).ok();
-    assert_eq!(decrypt_report["ok"], true, "decrypt after scan must succeed: {decrypt_report}");
+    assert_eq!(
+        decrypt_report["ok"], true,
+        "decrypt after scan must succeed: {decrypt_report}"
+    );
 }

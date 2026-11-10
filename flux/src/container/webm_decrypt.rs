@@ -63,7 +63,6 @@ pub fn decrypt_webm(input: &[u8], keys: &[([u8; KEY_LEN], [u8; KEY_LEN])]) -> Re
     })
 }
 
-
 fn scan_track_kids(input: &[u8]) -> Result<Vec<(u64, Option<[u8; KEY_LEN]>)>> {
     let mut out = Vec::new();
     let mut r = EbmlReader::new(input);
@@ -124,7 +123,6 @@ fn find_content_enc_kid(encodings: &[u8]) -> Result<Option<[u8; KEY_LEN]>> {
     }
     Ok(None)
 }
-
 
 const TRACK_TYPE: u32 = 0x83;
 const CODEC_ID: u32 = 0x86;
@@ -297,7 +295,6 @@ fn read_float(body: &[u8]) -> f64 {
     }
 }
 
-
 fn rewrite_tracks(tracks: &[u8], track_keys: &BTreeMap<u64, [u8; KEY_LEN]>) -> Result<Vec<u8>> {
     rewrite_children(tracks, |id, body| {
         if id == TRACK_ENTRY {
@@ -363,13 +360,19 @@ fn lace_kind_from_flags(flags: u8) -> Result<LaceKind> {
         1 => Ok(LaceKind::Xiph),
         2 => Ok(LaceKind::FixedSize),
         3 => Ok(LaceKind::Ebml),
-        _ => Err(crate::error::Error::InvalidInput("invalid lace kind flags (reserved 2-bit value)")),
+        _ => Err(crate::error::Error::InvalidInput(
+            "invalid lace kind flags (reserved 2-bit value)",
+        )),
     }
 }
 
-fn rewrite_block_bytes(body: &[u8], track_keys: &BTreeMap<u64, [u8; KEY_LEN]>) -> Result<Option<Vec<u8>>> {
-    let (track_number, tn_len) = read_vint_value(body)
-        .ok_or(Error::InvalidInput("webm block: truncated track-number VINT"))?;
+fn rewrite_block_bytes(
+    body: &[u8],
+    track_keys: &BTreeMap<u64, [u8; KEY_LEN]>,
+) -> Result<Option<Vec<u8>>> {
+    let (track_number, tn_len) = read_vint_value(body).ok_or(Error::InvalidInput(
+        "webm block: truncated track-number VINT",
+    ))?;
     let Some(key) = track_keys.get(&track_number) else {
         return Ok(None);
     };
@@ -470,7 +473,9 @@ fn split_laced_frames(kind: LaceKind, payload: &[u8]) -> Result<Vec<&[u8]>> {
         let mut offset = 0usize;
         for &size in &sizes {
             if offset + size > data.len() {
-                return Err(Error::InvalidInput("webm block: lace frame size exceeds available data"));
+                return Err(Error::InvalidInput(
+                    "webm block: lace frame size exceeds available data",
+                ));
             }
             frames.push(&data[offset..offset + size]);
             offset += size;
@@ -483,13 +488,18 @@ fn split_laced_frames(kind: LaceKind, payload: &[u8]) -> Result<Vec<&[u8]>> {
 fn build_ebml_laced_payload(frames: &[Vec<u8>]) -> Result<Vec<u8>> {
     let frame_count = frames.len();
     if frame_count < 2 || frame_count > 256 {
-        return Err(Error::InvalidInput("webm block: lace frame count out of range (2..=256)"));
+        return Err(Error::InvalidInput(
+            "webm block: lace frame count out of range (2..=256)",
+        ));
     }
     let mut out = Vec::new();
     out.push((frame_count - 1) as u8);
 
     let mut prev = frames[0].len() as i64;
-    out.extend_from_slice(&encode_size_vint(prev as u64, minimal_vint_width(prev as u64))?);
+    out.extend_from_slice(&encode_size_vint(
+        prev as u64,
+        minimal_vint_width(prev as u64),
+    )?);
     for f in &frames[1..frame_count - 1] {
         let size = f.len() as i64;
         let delta = size - prev;
@@ -507,7 +517,11 @@ fn build_ebml_laced_payload(frames: &[Vec<u8>]) -> Result<Vec<u8>> {
 fn minimal_vint_width(value: u64) -> usize {
     for n in 1..=8 {
         let data_bits = 7 * n;
-        let max = if data_bits >= 64 { u64::MAX } else { (1u64 << data_bits) - 1 };
+        let max = if data_bits >= 64 {
+            u64::MAX
+        } else {
+            (1u64 << data_bits) - 1
+        };
         if value <= max {
             return n;
         }
@@ -550,10 +564,9 @@ fn decrypt_block_frame(frame: &[u8], key: &[u8; KEY_LEN]) -> Result<Vec<u8>> {
     }
 
     let after_iv = &frame[1 + WEBM_IV_SIZE..];
-    let num_partitions = *after_iv
-        .first()
-        .ok_or(Error::InvalidInput("webm: truncated partitioned frame (missing num_partitions)"))?
-        as usize;
+    let num_partitions = *after_iv.first().ok_or(Error::InvalidInput(
+        "webm: truncated partitioned frame (missing num_partitions)",
+    ))? as usize;
     let offsets_end = 1 + num_partitions * 4;
     if after_iv.len() < offsets_end {
         return Err(Error::BufferTooShort {
@@ -578,7 +591,10 @@ fn decrypt_block_frame(frame: &[u8], key: &[u8; KEY_LEN]) -> Result<Vec<u8>> {
     Ok(data)
 }
 
-fn partition_offsets_to_subsamples(offsets: &[u32], data_len: usize) -> Result<Vec<SubSampleEntry>> {
+fn partition_offsets_to_subsamples(
+    offsets: &[u32],
+    data_len: usize,
+) -> Result<Vec<SubSampleEntry>> {
     let mut boundaries: Vec<u64> = Vec::with_capacity(offsets.len() + 2);
     boundaries.push(0);
     boundaries.extend(offsets.iter().map(|&o| o as u64));
@@ -599,8 +615,9 @@ fn partition_offsets_to_subsamples(offsets: &[u32], data_len: usize) -> Result<V
             let clear = u16::try_from(pending_clear).map_err(|_| {
                 Error::InvalidInput("webm: partitioned frame's clear run exceeds 65535 bytes")
             })?;
-            let cipher = u32::try_from(len)
-                .map_err(|_| Error::InvalidInput("webm: partitioned frame's cipher run exceeds 4 GiB"))?;
+            let cipher = u32::try_from(len).map_err(|_| {
+                Error::InvalidInput("webm: partitioned frame's cipher run exceeds 4 GiB")
+            })?;
             subsamples.push(SubSampleEntry {
                 bytes_of_clear_data: clear,
                 bytes_of_protected_data: cipher,
@@ -622,14 +639,16 @@ fn partition_offsets_to_subsamples(offsets: &[u32], data_len: usize) -> Result<V
     Ok(subsamples)
 }
 
-
 enum ElemAction {
     Keep,
     Drop,
     Replace(Vec<u8>),
 }
 
-fn rewrite_children(buf: &[u8], mut f: impl FnMut(u32, &[u8]) -> Result<ElemAction>) -> Result<Vec<u8>> {
+fn rewrite_children(
+    buf: &[u8],
+    mut f: impl FnMut(u32, &[u8]) -> Result<ElemAction>,
+) -> Result<Vec<u8>> {
     let mut out = Vec::with_capacity(buf.len());
     let mut r = EbmlReader::new(buf);
     while let Some(e) = r.next()? {
@@ -655,7 +674,11 @@ fn encode_size_vint(value: u64, width: usize) -> Result<Vec<u8>> {
         return Err(Error::InvalidInput("webm: unsupported EBML size width"));
     }
     let data_bits = 7 * width;
-    let max = if data_bits >= 64 { u64::MAX } else { (1u64 << data_bits) - 1 };
+    let max = if data_bits >= 64 {
+        u64::MAX
+    } else {
+        (1u64 << data_bits) - 1
+    };
     if value > max {
         return Err(Error::InvalidInput(
             "webm: shrunk element size unexpectedly overflows its original width",
@@ -764,7 +787,11 @@ fn read_vint(buf: &[u8]) -> Option<(u64, usize, bool)> {
         value = (value << 8) | b as u64;
     }
     let data_bits = 7 * len;
-    let max = if data_bits >= 64 { u64::MAX } else { (1u64 << data_bits) - 1 };
+    let max = if data_bits >= 64 {
+        u64::MAX
+    } else {
+        (1u64 << data_bits) - 1
+    };
     Some((value, len, value == max))
 }
 
@@ -936,7 +963,12 @@ mod tests {
 
     #[test]
     fn ebml_lace_roundtrips_with_equal_sizes() {
-        let frames: Vec<Vec<u8>> = vec![vec![0x01; 64], vec![0x02; 64], vec![0x03; 64], vec![0x04; 64]];
+        let frames: Vec<Vec<u8>> = vec![
+            vec![0x01; 64],
+            vec![0x02; 64],
+            vec![0x03; 64],
+            vec![0x04; 64],
+        ];
         let payload = build_ebml_laced_payload(&frames).unwrap();
         let parsed = split_laced_frames(LaceKind::Ebml, &payload).unwrap();
         for (parsed_frame, original) in parsed.iter().zip(&frames) {
@@ -1019,7 +1051,10 @@ mod tests {
 
         let segment_body_len = input.len() - 5;
         let inflated = segment_body_len + 40;
-        assert!(inflated < 127, "test fixture must stay in the 1-byte VINT range");
+        assert!(
+            inflated < 127,
+            "test fixture must stay in the 1-byte VINT range"
+        );
         input[4] = 0x80 | inflated as u8;
 
         let key = [0xBBu8; KEY_LEN];

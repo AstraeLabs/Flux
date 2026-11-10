@@ -155,8 +155,9 @@ fn av1_seq_header_dimensions(payload: &[u8]) -> Option<(u16, u16)> {
                     r.read_bits(32, "num_units_in_decoding_tick").ok()?;
                 let _buffer_removal_time_length_minus_1 =
                     r.read_bits(5, "buffer_removal_time_length_minus_1").ok()?;
-                let _frame_presentation_time_length_minus_1 =
-                    r.read_bits(5, "frame_presentation_time_length_minus_1").ok()?;
+                let _frame_presentation_time_length_minus_1 = r
+                    .read_bits(5, "frame_presentation_time_length_minus_1")
+                    .ok()?;
             }
         }
         let initial_display_delay_present_flag =
@@ -169,9 +170,8 @@ fn av1_seq_header_dimensions(payload: &[u8]) -> Option<(u16, u16)> {
                 let _seq_tier = r.read_flag("seq_tier[i]").ok()?;
             }
             if decoder_model_info_present_flag {
-                let decoder_model_present_for_this_op = r
-                    .read_flag("decoder_model_present_for_this_op[i]")
-                    .ok()?;
+                let decoder_model_present_for_this_op =
+                    r.read_flag("decoder_model_present_for_this_op[i]").ok()?;
                 if decoder_model_present_for_this_op {
                     return None;
                 }

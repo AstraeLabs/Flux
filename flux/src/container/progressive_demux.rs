@@ -4,8 +4,8 @@ use alloc::vec::Vec;
 
 use crate::error::{Error, Result};
 use crate::init_segment::{
-    ChunkLargeOffsetBox, ChunkOffsetBox, SampleSizeBox, SampleToChunkBox, StblChild,
-    SyncSampleBox, TrackBox,
+    ChunkLargeOffsetBox, ChunkOffsetBox, SampleSizeBox, SampleToChunkBox, StblChild, SyncSampleBox,
+    TrackBox,
 };
 use crate::timing::{CompositionOffsetBox, TimeToSampleBox};
 
@@ -257,7 +257,10 @@ mod tests {
         let stts = TimeToSampleBox {
             version: 0,
             flags: 0,
-            entries: alloc::vec![SttsEntry { sample_count: u32::MAX, sample_delta: 1 }],
+            entries: alloc::vec![SttsEntry {
+                sample_count: u32::MAX,
+                sample_delta: 1
+            }],
         };
         assert!(expand_stts(&stts, 4).is_err());
     }
@@ -267,7 +270,10 @@ mod tests {
         let ctts = CompositionOffsetBox {
             version: 0,
             flags: 0,
-            entries: alloc::vec![CttsEntry { sample_count: u32::MAX, sample_offset: 0 }],
+            entries: alloc::vec![CttsEntry {
+                sample_count: u32::MAX,
+                sample_offset: 0
+            }],
         };
         assert!(expand_ctts(Some(&ctts), 4).is_err());
     }
@@ -278,8 +284,16 @@ mod tests {
             version: 0,
             flags: 0,
             entries: alloc::vec![
-                StscEntry { first_chunk: 0, samples_per_chunk: 2, sample_description_index: 1 },
-                StscEntry { first_chunk: u32::MAX, samples_per_chunk: 9, sample_description_index: 1 },
+                StscEntry {
+                    first_chunk: 0,
+                    samples_per_chunk: 2,
+                    sample_description_index: 1
+                },
+                StscEntry {
+                    first_chunk: u32::MAX,
+                    samples_per_chunk: 9,
+                    sample_description_index: 1
+                },
             ],
         };
         assert_eq!(expand_stsc(&stsc, 3), alloc::vec![2, 2, 2]);

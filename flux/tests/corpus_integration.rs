@@ -1,4 +1,3 @@
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -9,8 +8,12 @@ fn corpus() -> PathBuf {
 }
 
 fn unique_temp_dir(stem: &str) -> PathBuf {
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let dir = std::env::temp_dir().join(format!("flux-corpus-{}-{stem}-{nanos}", std::process::id()));
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir =
+        std::env::temp_dir().join(format!("flux-corpus-{}-{stem}-{nanos}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
@@ -67,15 +70,38 @@ fn manifest() -> Vec<Entry> {
         .map(|m| Entry {
             file: m["file"].as_str().unwrap().to_string(),
             video: m["kind"] == "video",
-            keys: std::iter::once(format!("{}:{}", m["kid"].as_str().unwrap(), m["key"].as_str().unwrap()))
-                .chain(m["extra_keys"].as_array().into_iter().flatten().map(|k| k.as_str().unwrap().to_string()))
-                .collect(),
-            packet_md5: m["packet_md5"].as_str().unwrap().trim_start_matches("MD5=").to_string(),
+            keys: std::iter::once(format!(
+                "{}:{}",
+                m["kid"].as_str().unwrap(),
+                m["key"].as_str().unwrap()
+            ))
+            .chain(
+                m["extra_keys"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|k| k.as_str().unwrap().to_string()),
+            )
+            .collect(),
+            packet_md5: m["packet_md5"]
+                .as_str()
+                .unwrap()
+                .trim_start_matches("MD5=")
+                .to_string(),
             also: m["also"]
                 .as_array()
                 .into_iter()
                 .flatten()
-                .map(|a| (a["kind"] == "video", a["packet_md5"].as_str().unwrap().trim_start_matches("MD5=").to_string()))
+                .map(|a| {
+                    (
+                        a["kind"] == "video",
+                        a["packet_md5"]
+                            .as_str()
+                            .unwrap()
+                            .trim_start_matches("MD5=")
+                            .to_string(),
+                    )
+                })
                 .collect(),
             first_tfdt: m["first_tfdt"].as_u64().unwrap_or(0),
             wrong_key_refused: m["wrong_key_refused"].as_bool().unwrap(),
@@ -96,9 +122,15 @@ fn write_chunks(dir: &Path, data: &[u8]) {
 }
 
 fn concat_chunks(dir: &Path) -> Vec<u8> {
-    let mut names: Vec<_> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+    let mut names: Vec<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
     names.sort();
-    names.iter().flat_map(|n| std::fs::read(dir.join(n)).unwrap()).collect()
+    names
+        .iter()
+        .flat_map(|n| std::fs::read(dir.join(n)).unwrap())
+        .collect()
 }
 
 /// md5 of the clear packets of the first video/audio stream; `None` when ffmpeg is not installed.
@@ -106,11 +138,28 @@ fn packet_md5(path: &Path, video: bool) -> Option<String> {
     let out = Command::new("ffmpeg")
         .args(["-v", "error", "-i"])
         .arg(path)
-        .args(["-map", if video { "0:v:0" } else { "0:a:0" }, "-c", "copy", "-f", "md5", "-"])
+        .args([
+            "-map",
+            if video { "0:v:0" } else { "0:a:0" },
+            "-c",
+            "copy",
+            "-f",
+            "md5",
+            "-",
+        ])
         .output()
         .ok()?;
-    assert!(out.status.success(), "ffmpeg could not read {path:?}: {}", String::from_utf8_lossy(&out.stderr));
-    Some(String::from_utf8_lossy(&out.stdout).trim().trim_start_matches("MD5=").to_string())
+    assert!(
+        out.status.success(),
+        "ffmpeg could not read {path:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    Some(
+        String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .trim_start_matches("MD5=")
+            .to_string(),
+    )
 }
 
 /// `tfdt` of the first fragment (box walk: moof > traf > tfdt).
@@ -157,15 +206,29 @@ fn first_tfdt(data: &[u8]) -> Option<u64> {
 }
 
 fn ffmpeg_available() -> bool {
-    Command::new("ffmpeg").arg("-version").output().is_ok_and(|o| o.status.success())
+    Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .is_ok_and(|o| o.status.success())
 }
 
 fn check(entry: &Entry, mode: &str, out: &Path) {
-    assert!(std::fs::metadata(out).unwrap().len() > 0, "{} [{mode}]: empty output", entry.file);
-    let streams = std::iter::once((entry.video, &entry.packet_md5)).chain(entry.also.iter().map(|(v, m)| (*v, m)));
+    assert!(
+        std::fs::metadata(out).unwrap().len() > 0,
+        "{} [{mode}]: empty output",
+        entry.file
+    );
+    let streams = std::iter::once((entry.video, &entry.packet_md5))
+        .chain(entry.also.iter().map(|(v, m)| (*v, m)));
     for (video, want) in streams {
         if let Some(got) = packet_md5(out, video) {
-            assert_eq!(&got, want, "{} [{mode}]: {} packets differ from the independent decrypt", entry.file, if video { "video" } else { "audio" });
+            assert_eq!(
+                &got,
+                want,
+                "{} [{mode}]: {} packets differ from the independent decrypt",
+                entry.file,
+                if video { "video" } else { "audio" }
+            );
         }
     }
 }
@@ -173,7 +236,9 @@ fn check(entry: &Entry, mode: &str, out: &Path) {
 #[test]
 fn every_mode_matches_the_independent_decrypt() {
     if !ffmpeg_available() {
-        eprintln!("ffmpeg not found on PATH -- the packet comparison against mp4decrypt is skipped");
+        eprintln!(
+            "ffmpeg not found on PATH -- the packet comparison against mp4decrypt is skipped"
+        );
     }
     let work = unique_temp_dir("modes");
     for entry in manifest() {
@@ -183,8 +248,13 @@ fn every_mode_matches_the_independent_decrypt() {
 
         // progressive, straight from the file
         let out = work.join(format!("{}.prog.mp4", entry.file));
-        cli::run(Args { input: Some(src.clone()), output: Some(out.clone()), keys: keys.clone(), ..args() })
-            .unwrap_or_else(|e| panic!("{} [progressive]: {e}", entry.file));
+        cli::run(Args {
+            input: Some(src.clone()),
+            output: Some(out.clone()),
+            keys: keys.clone(),
+            ..args()
+        })
+        .unwrap_or_else(|e| panic!("{} [progressive]: {e}", entry.file));
         check(&entry, "progressive", &out);
 
         // --chunks -o
@@ -192,23 +262,50 @@ fn every_mode_matches_the_independent_decrypt() {
         std::fs::create_dir_all(&chunks).unwrap();
         write_chunks(&chunks, &data);
         let out = work.join(format!("{}.chunks.mp4", entry.file));
-        cli::run(Args { chunks: Some(chunks.clone()), output: Some(out.clone()), keys: keys.clone(), ..args() })
-            .unwrap_or_else(|e| panic!("{} [--chunks -o]: {e}", entry.file));
+        cli::run(Args {
+            chunks: Some(chunks.clone()),
+            output: Some(out.clone()),
+            keys: keys.clone(),
+            ..args()
+        })
+        .unwrap_or_else(|e| panic!("{} [--chunks -o]: {e}", entry.file));
         check(&entry, "--chunks -o", &out);
-        assert_eq!(concat_chunks(&chunks), data, "{}: --chunks -o must not touch the chunks", entry.file);
+        assert_eq!(
+            concat_chunks(&chunks),
+            data,
+            "{}: --chunks -o must not touch the chunks",
+            entry.file
+        );
 
         // --chunks -o --tfdt-rebase: same packets, timeline starts at 0 (also for 64-bit tfdt)
         let out = work.join(format!("{}.rebase.mp4", entry.file));
-        cli::run(Args { chunks: Some(chunks.clone()), output: Some(out.clone()), keys: keys.clone(), tfdt_rebase: true, ..args() })
-            .unwrap_or_else(|e| panic!("{} [--tfdt-rebase]: {e}", entry.file));
+        cli::run(Args {
+            chunks: Some(chunks.clone()),
+            output: Some(out.clone()),
+            keys: keys.clone(),
+            tfdt_rebase: true,
+            ..args()
+        })
+        .unwrap_or_else(|e| panic!("{} [--tfdt-rebase]: {e}", entry.file));
         check(&entry, "--tfdt-rebase", &out);
         // A file without any tfdt (GPAC omits it) must stay that way: the rebase moves timestamps, it adds none.
         let expected = first_tfdt(&data).map(|_| 0);
-        assert_eq!(first_tfdt(&std::fs::read(&out).unwrap()), expected, "{}: rebase must start at 0 (was {})", entry.file, entry.first_tfdt);
+        assert_eq!(
+            first_tfdt(&std::fs::read(&out).unwrap()),
+            expected,
+            "{}: rebase must start at 0 (was {})",
+            entry.file,
+            entry.first_tfdt
+        );
 
         // --chunks --in-place
-        cli::run(Args { chunks: Some(chunks.clone()), in_place: true, keys, ..args() })
-            .unwrap_or_else(|e| panic!("{} [--in-place]: {e}", entry.file));
+        cli::run(Args {
+            chunks: Some(chunks.clone()),
+            in_place: true,
+            keys,
+            ..args()
+        })
+        .unwrap_or_else(|e| panic!("{} [--in-place]: {e}", entry.file));
         let out = work.join(format!("{}.inplace.mp4", entry.file));
         std::fs::write(&out, concat_chunks(&chunks)).unwrap();
         check(&entry, "--in-place", &out);
@@ -219,7 +316,10 @@ fn every_mode_matches_the_independent_decrypt() {
 /// The 64-bit case must really be one: a tfdt that does not fit 32 bits.
 #[test]
 fn the_corpus_covers_a_64_bit_tfdt() {
-    assert!(manifest().iter().any(|e| e.first_tfdt > u32::MAX as u64), "no fixture starts beyond 2^32");
+    assert!(
+        manifest().iter().any(|e| e.first_tfdt > u32::MAX as u64),
+        "no fixture starts beyond 2^32"
+    );
 }
 
 /// Files whose wrong key is caught up front: audio (sync word / test decode) and H.264 (test decode of the sync
@@ -234,21 +334,44 @@ fn a_wrong_key_is_refused_for_the_codecs_that_can_prove_it() {
     }
     let work = unique_temp_dir("wrongkey");
     let mut checked = 0;
-    for entry in manifest().into_iter().filter(|e| e.wrong_key_refused && (ffmpeg || e.file.contains("ac3"))) {
+    for entry in manifest()
+        .into_iter()
+        .filter(|e| e.wrong_key_refused && (ffmpeg || e.file.contains("ac3")))
+    {
         let kid = entry.keys[0].split(':').next().unwrap();
         let data = std::fs::read(corpus().join(&entry.file)).unwrap();
         for seed in 1u8..=6 {
-            let wrong = format!("{kid}:{}", format!("{:02x}", seed.wrapping_mul(37)).repeat(16));
+            let wrong = format!(
+                "{kid}:{}",
+                format!("{:02x}", seed.wrapping_mul(37)).repeat(16)
+            );
             let chunks = work.join(format!("{}.{seed}", entry.file));
             std::fs::create_dir_all(&chunks).unwrap();
             write_chunks(&chunks, &data);
-            let res = cli::run(Args { chunks: Some(chunks.clone()), in_place: true, keys: vec![wrong.clone()], ..args() });
-            assert!(res.is_err(), "{}: wrong key {wrong} was accepted", entry.file);
-            assert_eq!(concat_chunks(&chunks), data, "{}: a refused run must leave the chunks untouched", entry.file);
+            let res = cli::run(Args {
+                chunks: Some(chunks.clone()),
+                in_place: true,
+                keys: vec![wrong.clone()],
+                ..args()
+            });
+            assert!(
+                res.is_err(),
+                "{}: wrong key {wrong} was accepted",
+                entry.file
+            );
+            assert_eq!(
+                concat_chunks(&chunks),
+                data,
+                "{}: a refused run must leave the chunks untouched",
+                entry.file
+            );
             checked += 1;
         }
     }
-    assert!(checked >= if ffmpeg { 60 } else { 12 }, "expected to check many files, checked {checked}");
+    assert!(
+        checked >= if ffmpeg { 60 } else { 12 },
+        "expected to check many files, checked {checked}"
+    );
     let _ = std::fs::remove_dir_all(&work);
 }
 
@@ -257,22 +380,53 @@ fn a_wrong_key_is_refused_for_the_codecs_that_can_prove_it() {
 /// has to fail, with it every packet must match the clear source.
 #[test]
 fn a_rotating_file_without_its_second_key_is_refused() {
-    let entry = manifest().into_iter().find(|e| e.file == "gpac_keyroll10_avc.mp4").expect("fixture in the manifest");
+    let entry = manifest()
+        .into_iter()
+        .find(|e| e.file == "gpac_keyroll10_avc.mp4")
+        .expect("fixture in the manifest");
     assert_eq!(entry.keys.len(), 2, "the fixture needs two keys");
     let data = std::fs::read(corpus().join(&entry.file)).unwrap();
     let work = unique_temp_dir("rotation");
 
     let out = work.join("one-key.mp4");
-    let res = cli::run(Args { input: Some(corpus().join(&entry.file)), output: Some(out), keys: entry.keys[..1].to_vec(), ..args() });
-    assert!(res.is_err(), "progressive: decrypting a rotating file with one key must fail");
+    let res = cli::run(Args {
+        input: Some(corpus().join(&entry.file)),
+        output: Some(out),
+        keys: entry.keys[..1].to_vec(),
+        ..args()
+    });
+    assert!(
+        res.is_err(),
+        "progressive: decrypting a rotating file with one key must fail"
+    );
 
     let chunks = work.join("chunks");
     std::fs::create_dir_all(&chunks).unwrap();
     write_chunks(&chunks, &data);
-    let res = cli::run(Args { chunks: Some(chunks.clone()), output: Some(work.join("one-key.chunks.mp4")), keys: entry.keys[..1].to_vec(), ..args() });
-    assert!(res.is_err(), "--chunks: decrypting a rotating file with one key must fail");
-    let res = cli::run(Args { chunks: Some(chunks.clone()), in_place: true, keys: entry.keys[..1].to_vec(), ..args() });
-    assert!(res.is_err(), "--in-place: decrypting a rotating file with one key must fail");
-    assert_eq!(concat_chunks(&chunks), data, "a refused --in-place run must leave the chunks untouched");
+    let res = cli::run(Args {
+        chunks: Some(chunks.clone()),
+        output: Some(work.join("one-key.chunks.mp4")),
+        keys: entry.keys[..1].to_vec(),
+        ..args()
+    });
+    assert!(
+        res.is_err(),
+        "--chunks: decrypting a rotating file with one key must fail"
+    );
+    let res = cli::run(Args {
+        chunks: Some(chunks.clone()),
+        in_place: true,
+        keys: entry.keys[..1].to_vec(),
+        ..args()
+    });
+    assert!(
+        res.is_err(),
+        "--in-place: decrypting a rotating file with one key must fail"
+    );
+    assert_eq!(
+        concat_chunks(&chunks),
+        data,
+        "a refused --in-place run must leave the chunks untouched"
+    );
     let _ = std::fs::remove_dir_all(&work);
 }

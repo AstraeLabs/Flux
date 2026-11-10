@@ -179,9 +179,7 @@ impl Serialize for HEVCDecoderConfigurationRecord {
             + self
                 .arrays
                 .iter()
-                .map(|a| {
-                    3 + a.nalus.iter().map(|n| 2 + n.0.len()).sum::<usize>()
-                })
+                .map(|a| 3 + a.nalus.iter().map(|n| 2 + n.0.len()).sum::<usize>())
                 .sum::<usize>()
     }
 

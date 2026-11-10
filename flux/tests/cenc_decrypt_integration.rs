@@ -1,13 +1,20 @@
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use flux::cli::{self, Args};
 
 fn unique_temp_path(name: &str) -> PathBuf {
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let (stem, ext) = name.rsplit_once('.').expect("fixture output name must have an extension");
-    std::env::temp_dir().join(format!("flux-test-{}-{stem}-{nanos}.{ext}", std::process::id()))
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let (stem, ext) = name
+        .rsplit_once('.')
+        .expect("fixture output name must have an extension");
+    std::env::temp_dir().join(format!(
+        "flux-test-{}-{stem}-{nanos}.{ext}",
+        std::process::id()
+    ))
 }
 
 fn base_args(input: PathBuf, output: PathBuf, keys: Vec<&str>) -> Args {
@@ -67,10 +74,10 @@ fn ffmpeg_md5(path: &Path, extra_args: &[&str]) -> Option<String> {
 }
 
 fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
 }
-
-
 
 const EXPECTED_AUDIO_PACKETS_MD5: &str = "283ab05f361c3ed6ea5f2ec55b2247f4";
 
@@ -86,7 +93,10 @@ fn cenc_audio_decrypts_and_matches_independently_decrypted_packets() {
     assert!(std::fs::metadata(&out).unwrap().len() > 0);
 
     if let Some(got) = ffmpeg_md5(&out, &["-map", "0:a:0", "-c", "copy"]) {
-        assert_eq!(got, EXPECTED_AUDIO_PACKETS_MD5, "decrypted cenc audio packets must match the independent reference decrypt");
+        assert_eq!(
+            got, EXPECTED_AUDIO_PACKETS_MD5,
+            "decrypted cenc audio packets must match the independent reference decrypt"
+        );
     }
     let _ = std::fs::remove_file(&out);
 }
@@ -103,7 +113,10 @@ fn cbcs_audio_decrypts_to_the_same_packets_as_cenc() {
     assert!(std::fs::metadata(&out).unwrap().len() > 0);
 
     if let Some(got) = ffmpeg_md5(&out, &["-map", "0:a:0", "-c", "copy"]) {
-        assert_eq!(got, EXPECTED_AUDIO_PACKETS_MD5, "decrypted cbcs audio packets must equal the cenc ones (same clear content)");
+        assert_eq!(
+            got, EXPECTED_AUDIO_PACKETS_MD5,
+            "decrypted cbcs audio packets must equal the cenc ones (same clear content)"
+        );
     }
     let _ = std::fs::remove_file(&out);
 }
@@ -121,7 +134,10 @@ fn piff_uuid_box_decrypts_and_matches_independently_decrypted_video() {
     assert!(std::fs::metadata(&out).unwrap().len() > 0);
 
     if let Some(got) = ffmpeg_md5(&out, &["-map", "0:v", "-f", "rawvideo"]) {
-        assert_eq!(got, EXPECTED_VIDEO_MD5, "decrypted PIFF video must match the independent reference decrypt");
+        assert_eq!(
+            got, EXPECTED_VIDEO_MD5,
+            "decrypted PIFF video must match the independent reference decrypt"
+        );
     }
     let _ = std::fs::remove_file(&out);
 }
@@ -153,7 +169,10 @@ fn fragments_info_bare_fragment_decrypts_and_stitches_into_playable_video() {
     std::fs::write(&stitched_path, &stitched).unwrap();
 
     if let Some(got) = ffmpeg_md5(&stitched_path, &["-map", "0:v", "-f", "rawvideo"]) {
-        assert_eq!(got, EXPECTED_VIDEO_MD5, "stitched fragments-info output must match the previously-verified reference");
+        assert_eq!(
+            got, EXPECTED_VIDEO_MD5,
+            "stitched fragments-info output must match the previously-verified reference"
+        );
     }
     let _ = std::fs::remove_file(&stitched_path);
 }
@@ -202,7 +221,11 @@ fn first_traf_children(data: &[u8]) -> Vec<[u8; 4]> {
             continue;
         }
         let traf_body = &moof_body[off + 8..off + size];
-        fourccs.extend(top_level_box_offsets(traf_body).into_iter().map(|(f, _, _)| f));
+        fourccs.extend(
+            top_level_box_offsets(traf_body)
+                .into_iter()
+                .map(|(f, _, _)| f),
+        );
     }
     fourccs
 }
@@ -211,9 +234,15 @@ fn first_traf_children(data: &[u8]) -> Vec<[u8; 4]> {
 fn fragments_info_strips_senc_saiz_saio_but_keeps_sample_group_boxes() {
     let whole = std::fs::read(fixture("cenc_audio.mp4")).unwrap();
     let boxes = top_level_box_offsets(&whole);
-    let styp_offsets: Vec<usize> =
-        boxes.iter().filter(|(t, _, _)| t == b"styp").map(|(_, o, _)| *o).collect();
-    assert!(styp_offsets.len() >= 2, "fixture must have at least 2 fragments to isolate the first one");
+    let styp_offsets: Vec<usize> = boxes
+        .iter()
+        .filter(|(t, _, _)| t == b"styp")
+        .map(|(_, o, _)| *o)
+        .collect();
+    assert!(
+        styp_offsets.len() >= 2,
+        "fixture must have at least 2 fragments to isolate the first one"
+    );
     let init_bytes = &whole[..styp_offsets[0]];
     let frag1_bytes = &whole[styp_offsets[0]..styp_offsets[1]];
     assert!(
@@ -288,21 +317,37 @@ fn fragments_info_init_only_rewrites_encv_stsd_to_clear() {
     cli::run(args).expect("--fragments-info init-only rewrite must succeed");
 
     let out_bytes = std::fs::read(&out).unwrap();
-    assert!(!contains_box_type(&out_bytes, b"encv"), "output stsd must no longer carry encv");
-    assert!(contains_box_type(&out_bytes, b"avc1"), "output stsd must carry a clear avc1 entry instead");
+    assert!(
+        !contains_box_type(&out_bytes, b"encv"),
+        "output stsd must no longer carry encv"
+    );
+    assert!(
+        contains_box_type(&out_bytes, b"avc1"),
+        "output stsd must carry a clear avc1 entry instead"
+    );
 
     let _ = std::fs::remove_file(&init_only_path);
     let _ = std::fs::remove_file(&out);
 }
 
-
 /// `(tfdt value width in bytes, baseMediaDecodeTime)` of the first tfdt box found in `fragment`.
 fn first_tfdt(fragment: &[u8]) -> (usize, u64) {
-    let p = fragment.windows(4).position(|w| w == b"tfdt").expect("fragment must carry a tfdt box");
+    let p = fragment
+        .windows(4)
+        .position(|w| w == b"tfdt")
+        .expect("fragment must carry a tfdt box");
     if fragment[p + 4] == 1 {
-        (8, u64::from_be_bytes(fragment[p + 8..p + 16].try_into().unwrap()))
+        (
+            8,
+            u64::from_be_bytes(fragment[p + 8..p + 16].try_into().unwrap()),
+        )
     } else {
-        (4, u64::from(u32::from_be_bytes(fragment[p + 8..p + 12].try_into().unwrap())))
+        (
+            4,
+            u64::from(u32::from_be_bytes(
+                fragment[p + 8..p + 12].try_into().unwrap(),
+            )),
+        )
     }
 }
 
@@ -310,9 +355,15 @@ fn first_tfdt(fragment: &[u8]) -> (usize, u64) {
 fn fragments_info_tfdt_base_rebases_the_decrypted_fragment() {
     let whole = std::fs::read(fixture("cenc_audio.mp4")).unwrap();
     let boxes = top_level_box_offsets(&whole);
-    let styp_offsets: Vec<usize> =
-        boxes.iter().filter(|(t, _, _)| t == b"styp").map(|(_, o, _)| *o).collect();
-    assert!(styp_offsets.len() >= 3, "fixture must have at least 3 fragments");
+    let styp_offsets: Vec<usize> = boxes
+        .iter()
+        .filter(|(t, _, _)| t == b"styp")
+        .map(|(_, o, _)| *o)
+        .collect();
+    assert!(
+        styp_offsets.len() >= 3,
+        "fixture must have at least 3 fragments"
+    );
     let init_path = unique_temp_path("cenc-audio-tfdt-init.mp4");
     std::fs::write(&init_path, &whole[..styp_offsets[0]]).unwrap();
 
@@ -342,7 +393,10 @@ fn fragments_info_tfdt_base_rebases_the_decrypted_fragment() {
     let plain_second = decrypt(second, None, "tfdt-second.mp4");
     let (width, t_first) = first_tfdt(&plain_first);
     let (_, t_second) = first_tfdt(&plain_second);
-    assert!(t_second > t_first, "the fixture's fragments must advance in time");
+    assert!(
+        t_second > t_first,
+        "the fixture's fragments must advance in time"
+    );
 
     // One base for the whole track: the first fragment lands on zero, the next keeps its distance.
     let zero_first = decrypt(first, Some(t_first), "tfdt-first-zero.mp4");
@@ -352,8 +406,15 @@ fn fragments_info_tfdt_base_rebases_the_decrypted_fragment() {
 
     // Nothing else changes: same size, same bytes outside the tfdt value.
     assert_eq!(zero_first.len(), plain_first.len());
-    let differing = zero_first.iter().zip(&plain_first).filter(|(a, b)| a != b).count();
-    assert!(differing <= width, "only the tfdt value may differ, {differing} bytes did");
+    let differing = zero_first
+        .iter()
+        .zip(&plain_first)
+        .filter(|(a, b)| a != b)
+        .count();
+    assert!(
+        differing <= width,
+        "only the tfdt value may differ, {differing} bytes did"
+    );
 
     // A base past the fragment clamps at zero instead of wrapping.
     let past = decrypt(first, Some(t_first + 1_000_000), "tfdt-first-past.mp4");

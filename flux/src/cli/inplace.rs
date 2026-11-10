@@ -38,11 +38,16 @@ fn stdout_file() -> io::Result<fs::File> {
     #[cfg(windows)]
     {
         use std::os::windows::io::AsHandle;
-        Ok(fs::File::from(io::stdout().as_handle().try_clone_to_owned()?))
+        Ok(fs::File::from(
+            io::stdout().as_handle().try_clone_to_owned()?,
+        ))
     }
     #[cfg(not(any(unix, windows)))]
     {
-        Err(io::Error::new(io::ErrorKind::Unsupported, "-o - is not supported on this platform"))
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "-o - is not supported on this platform",
+        ))
     }
 }
 
@@ -158,7 +163,10 @@ impl ChunkSet {
 }
 
 fn eof() -> io::Error {
-    io::Error::new(io::ErrorKind::UnexpectedEof, "read/write past the end of the chunk set")
+    io::Error::new(
+        io::ErrorKind::UnexpectedEof,
+        "read/write past the end of the chunk set",
+    )
 }
 
 /// The `seg_<n>.mp4` files of `dir` in numeric order.
@@ -181,7 +189,9 @@ pub(super) fn list_chunks(dir: &Path) -> CliResult<Vec<PathBuf>> {
         found.push((num, entry.path()));
     }
     if found.is_empty() {
-        return Err(invalid("--chunks: no seg_<n>.mp4 files found in the directory"));
+        return Err(invalid(
+            "--chunks: no seg_<n>.mp4 files found in the directory",
+        ));
     }
     found.sort_by_key(|(n, _)| *n);
     for w in found.windows(2) {
@@ -213,7 +223,9 @@ fn scan_boxes(set: &ChunkSet) -> CliResult<Vec<Bx>> {
         let mut size = u32::from_be_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]) as u64;
         if size == 1 {
             if want < 16 {
-                return Err(invalid("truncated 64-bit box header at the end of the input"));
+                return Err(invalid(
+                    "truncated 64-bit box header at the end of the input",
+                ));
             }
             size = u64::from_be_bytes(
                 hdr[8..16]
@@ -221,14 +233,20 @@ fn scan_boxes(set: &ChunkSet) -> CliResult<Vec<Bx>> {
                     .map_err(|_| invalid("truncated 64-bit box size field"))?,
             );
         } else if size == 0 {
-            return Err(invalid("top-level box with size 0 (to-EOF) is not supported"));
+            return Err(invalid(
+                "top-level box with size 0 (to-EOF) is not supported",
+            ));
         }
         if size < BOX_HDR as u64 || off.checked_add(size).is_none_or(|e| e > total) {
             return Err(invalid(
                 "box extends past the end of the input (truncated download or missing chunk)",
             ));
         }
-        out.push(Bx { ty: [hdr[4], hdr[5], hdr[6], hdr[7]], offset: off, size });
+        out.push(Bx {
+            ty: [hdr[4], hdr[5], hdr[6], hdr[7]],
+            offset: off,
+            size,
+        });
         off += size;
     }
     Ok(out)
@@ -240,7 +258,8 @@ fn children(data: &[u8], start: usize, end: usize) -> Vec<(usize, usize, [u8; 4]
     let end = end.min(data.len());
     let mut pos = start;
     while pos + BOX_HDR <= end {
-        let mut size = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
+        let mut size =
+            u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
         let ty = [data[pos + 4], data[pos + 5], data[pos + 6], data[pos + 7]];
         let mut hdr = BOX_HDR;
         if size == 1 {
@@ -332,25 +351,35 @@ fn patch_stsd(head: &mut [u8], body_start: usize, end: usize) -> usize {
                     continue;
                 }
                 let version = u16::from_be_bytes([head[fixed + 8], head[fixed + 9]]);
-                fixed + match version {
-                    0 => 28,
-                    1 => 44,
-                    _ => 64,
-                }
+                fixed
+                    + match version {
+                        0 => 28,
+                        1 => 44,
+                        _ => 64,
+                    }
             }
+            b"encs" | b"enct" => fixed + 8,
             _ => continue,
         };
         let eend = eoff + esize;
-        let Some((soff, ssize, _, shdr)) = children(head, child_start, eend)
+        let sinf = children(head, child_start, eend)
             .into_iter()
             .find(|(_, _, t, _)| t == b"sinf")
-        else {
+            .or_else(|| scan_for_sinf(head, fixed + 8, eend));
+        let Some((soff, ssize, _, shdr)) = sinf else {
             continue;
         };
         let Some(format) = children(head, soff + shdr, soff + ssize)
             .into_iter()
             .find(|(_, s, t, h)| t == b"frma" && *s >= h + 4)
-            .map(|(o, _, _, h)| [head[o + h], head[o + h + 1], head[o + h + 2], head[o + h + 3]])
+            .map(|(o, _, _, h)| {
+                [
+                    head[o + h],
+                    head[o + h + 1],
+                    head[o + h + 2],
+                    head[o + h + 3],
+                ]
+            })
         else {
             continue;
         };
@@ -359,6 +388,20 @@ fn patch_stsd(head: &mut [u8], body_start: usize, end: usize) -> usize {
         restored += 1;
     }
     restored
+}
+
+fn scan_for_sinf(head: &[u8], from: usize, end: usize) -> Option<(usize, usize, [u8; 4], usize)> {
+    let mut off = from;
+    while off + BOX_HDR <= end && off + BOX_HDR <= head.len() {
+        if &head[off + 4..off + 8] == b"sinf" {
+            let sz = u32::from_be_bytes(head[off..off + 4].try_into().ok()?) as usize;
+            if sz >= BOX_HDR && off + sz <= end {
+                return Some((off, sz, *b"sinf", BOX_HDR));
+            }
+        }
+        off += 1;
+    }
+    None
 }
 
 /// `(value_offset, width)` of every tfdt box inside `moof`, in document order.
@@ -392,7 +435,9 @@ fn tfdt_offsets(moof: &[u8]) -> Vec<(usize, usize)> {
 fn read_tfdt_value(moof: &[u8], value_off: usize, width: usize) -> u64 {
     match width {
         8 => u64::from_be_bytes(moof[value_off..value_off + 8].try_into().unwrap()),
-        _ => u64::from(u32::from_be_bytes(moof[value_off..value_off + 4].try_into().unwrap())),
+        _ => u64::from(u32::from_be_bytes(
+            moof[value_off..value_off + 4].try_into().unwrap(),
+        )),
     }
 }
 
@@ -448,7 +493,9 @@ fn process_region(
         None,
     )?;
     for ft in fragments {
-        let Some(key) = ctx.keys.get(&ft.track_id) else { continue };
+        let Some(key) = ctx.keys.get(&ft.track_id) else {
+            continue;
+        };
         let crypto_track = ctx
             .crypto_tracks
             .iter()
@@ -465,9 +512,14 @@ fn process_region(
                 .checked_sub(region_off)
                 .and_then(|s| usize::try_from(s).ok())
                 .ok_or_else(|| invalid("sample data lies before its moof"))?;
-            let end = start.checked_add(run_bytes).filter(|&e| e <= region.len()).ok_or_else(|| {
-                invalid("sample data lies outside its fragment (truncated or unsupported layout)")
-            })?;
+            let end = start
+                .checked_add(run_bytes)
+                .filter(|&e| e <= region.len())
+                .ok_or_else(|| {
+                    invalid(
+                        "sample data lies outside its fragment (truncated or unsupported layout)",
+                    )
+                })?;
             decrypt_run_maybe_parallel(
                 crypto_track,
                 &ft.crypto[rs..rs + rl],
@@ -498,7 +550,10 @@ fn process_region(
                     })
                     .collect();
                 if let Err(detail) = key_sanity::check_samples(cfg, &samples, ctx.ffmpeg) {
-                    return Err(CliError::KeySanityCheckFailed { track_id: ft.track_id, detail });
+                    return Err(CliError::KeySanityCheckFailed {
+                        track_id: ft.track_id,
+                        detail,
+                    });
                 }
             }
         }
@@ -525,7 +580,9 @@ pub(super) fn decrypt_fmp4(
         .ok_or_else(|| invalid("no moov box in the input"))?;
     let moofs: Vec<&Bx> = boxes.iter().filter(|b| &b.ty == b"moof").collect();
     let Some(first_moof) = moofs.first() else {
-        return Err(invalid("no moof box: --in-place/--chunks need a fragmented MP4"));
+        return Err(invalid(
+            "no moof box: --in-place/--chunks need a fragmented MP4",
+        ));
     };
     if moov.offset >= first_moof.offset {
         return Err(invalid("moov must come before the first moof"));
@@ -553,12 +610,16 @@ pub(super) fn decrypt_fmp4(
 
     let crypto_tracks = cenc_decrypt::harvest_moov_crypto(moov_bytes)?;
     let trex = cenc_decrypt::harvest_trex_defaults(moov_bytes);
-    let codecs: BTreeMap<u32, crate::CodecConfig> = cenc_decrypt::harvest_moov_track_specs(moov_bytes)?
-        .1
-        .into_iter()
-        .map(|s| (s.track_id, s.codec_config))
-        .collect();
-    if !crypto_tracks.iter().any(|t| t.tenc.default_is_protected != 0) {
+    let codecs: BTreeMap<u32, crate::CodecConfig> =
+        cenc_decrypt::harvest_moov_track_specs(moov_bytes)?
+            .1
+            .into_iter()
+            .map(|s| (s.track_id, s.codec_config))
+            .collect();
+    if !crypto_tracks
+        .iter()
+        .any(|t| t.tenc.default_is_protected != 0)
+    {
         return Err(invalid("no protected track found (already decrypted?)"));
     }
     let mut key_map = KeyMap::new();
@@ -571,9 +632,12 @@ pub(super) fn decrypt_fmp4(
         if t.tenc.default_is_protected == 0 {
             continue;
         }
-        let key = key_map.get(&t.tenc.default_kid).ok_or(CliError::Flux(
-            crate::Error::InvalidInput("no content key for the track's default_KID"),
-        ))?;
+        let key =
+            key_map
+                .get(&t.tenc.default_kid)
+                .ok_or(CliError::Flux(crate::Error::InvalidInput(
+                    "no content key for the track's default_KID",
+                )))?;
         track_keys.insert(t.track_id, *key);
     }
     let target_ids: Vec<u32> = crypto_tracks.iter().map(|t| t.track_id).collect();
@@ -593,7 +657,9 @@ pub(super) fn decrypt_fmp4(
         .map(|(i, m)| (m.offset, moofs.get(i + 1).map_or(total, |n| n.offset)))
         .collect();
     if region_bounds.iter().any(|(s, e)| e - s > MAX_REGION) {
-        return Err(invalid("a fragment is larger than the supported region size"));
+        return Err(invalid(
+            "a fragment is larger than the supported region size",
+        ));
     }
     let n_regions = region_bounds.len();
     let read_region = |i: usize| -> io::Result<Vec<u8>> {
@@ -613,7 +679,15 @@ pub(super) fn decrypt_fmp4(
                 break;
             }
             let mut buf = read_region(i)?;
-            process_region(&ctx, m.offset, m.size as usize, &mut buf, &mut dts, &mut scratch, &mut pending)?;
+            process_region(
+                &ctx,
+                m.offset,
+                m.size as usize,
+                &mut buf,
+                &mut dts,
+                &mut scratch,
+                &mut pending,
+            )?;
         }
     }
     if profile {
@@ -628,7 +702,9 @@ pub(super) fn decrypt_fmp4(
 
     let restored = patch_init(&mut head);
     if restored == 0 {
-        return Err(invalid("could not locate any encv/enca sample entry to restore"));
+        return Err(invalid(
+            "could not locate any encv/enca sample entry to restore",
+        ));
     }
 
     enum Sink {
@@ -696,7 +772,15 @@ pub(super) fn decrypt_fmp4(
             };
             let m = moofs[i];
             let t = Instant::now();
-            if let Err(e) = process_region(&ctx, m.offset, m.size as usize, &mut buf, &mut next_dts, &mut scratch, &mut no_pending) {
+            if let Err(e) = process_region(
+                &ctx,
+                m.offset,
+                m.size as usize,
+                &mut buf,
+                &mut next_dts,
+                &mut scratch,
+                &mut no_pending,
+            ) {
                 result = Err(e);
                 break;
             }

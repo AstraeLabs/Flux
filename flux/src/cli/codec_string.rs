@@ -5,14 +5,33 @@ use alloc::string::String;
 
 pub(crate) fn rfc6381_codec_string(cfg: &CodecConfig) -> String {
     match cfg {
-        CodecConfig::Avc { config, .. } => {
+        CodecConfig::Avc {
+            config,
+            codec_fourcc,
+            ..
+        } => {
             let c = &config.config;
+            let tag = core::str::from_utf8(codec_fourcc).unwrap_or("avc1");
             format!(
-                "avc1.{:02x}{:02x}{:02x}",
+                "{tag}.{:02x}{:02x}{:02x}",
                 c.profile_indication, c.profile_compatibility, c.level_indication
             )
         }
-        CodecConfig::Hevc { config, .. } => hevc_codec_string(&config.config),
+        CodecConfig::Hevc {
+            config,
+            codec_fourcc,
+            ..
+        } => {
+            let s = hevc_codec_string(&config.config);
+            let tag = core::str::from_utf8(codec_fourcc).unwrap_or("hvc1");
+            if let Some(rest) = s.strip_prefix("hvc1") {
+                format!("{tag}{rest}")
+            } else if let Some(rest) = s.strip_prefix("hev1") {
+                format!("{tag}{rest}")
+            } else {
+                s
+            }
+        }
         CodecConfig::Vvc { config, .. } => vvc_codec_string(&config.config),
         CodecConfig::Av1 { config, .. } => {
             let tier = if config.seq_tier_0 { "H" } else { "M" };
@@ -29,10 +48,16 @@ pub(crate) fn rfc6381_codec_string(cfg: &CodecConfig) -> String {
             )
         }
         CodecConfig::Vp9 { config, .. } => {
-            format!("vp09.{:02}.{:02}.{:02}", config.profile, config.level, config.bit_depth)
+            format!(
+                "vp09.{:02}.{:02}.{:02}",
+                config.profile, config.level, config.bit_depth
+            )
         }
         CodecConfig::Vp8 { config, .. } => {
-            format!("vp08.{:02}.{:02}.{:02}", config.profile, config.level, config.bit_depth)
+            format!(
+                "vp08.{:02}.{:02}.{:02}",
+                config.profile, config.level, config.bit_depth
+            )
         }
         CodecConfig::Aac { esds, .. } => aac_codec_string(esds),
         CodecConfig::Ac3 { .. } => String::from("ac-3"),
@@ -41,9 +66,7 @@ pub(crate) fn rfc6381_codec_string(cfg: &CodecConfig) -> String {
         CodecConfig::Ac4 { .. } => String::from("ac-4"),
         CodecConfig::Opus { .. } => String::from("opus"),
         CodecConfig::Flac { .. } => String::from("fLaC"),
-        CodecConfig::Dts { codec_fourcc, .. } => {
-            String::from_utf8_lossy(codec_fourcc).into_owned()
-        }
+        CodecConfig::Dts { codec_fourcc, .. } => String::from_utf8_lossy(codec_fourcc).into_owned(),
         CodecConfig::DtsX { codec_fourcc, .. } => {
             String::from_utf8_lossy(codec_fourcc).into_owned()
         }
@@ -114,7 +137,10 @@ fn vvc_codec_string(c: &crate::vvc_config::VvcDecoderConfigurationRecord) -> Str
     match &c.ptl {
         Some(ptl) => {
             let tier = if ptl.general_tier_flag { "H" } else { "L" };
-            format!("vvc1.{}.{}{}", ptl.general_profile_idc, tier, ptl.general_level_idc)
+            format!(
+                "vvc1.{}.{}{}",
+                ptl.general_profile_idc, tier, ptl.general_level_idc
+            )
         }
         None => String::from("vvc1"),
     }

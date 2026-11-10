@@ -1013,6 +1013,11 @@ mod hardening_tests {
     #[test]
     fn trun_zero_samples_ok() {
         let b = trun_body(TRUN_SAMPLE_SIZE_PRESENT, 0, &[]);
-        assert!(TrackFragmentRunBox::parse_body(&b).unwrap().samples.is_empty());
+        assert!(
+            TrackFragmentRunBox::parse_body(&b)
+                .unwrap()
+                .samples
+                .is_empty()
+        );
     }
 }

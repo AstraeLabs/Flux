@@ -30,7 +30,6 @@ pub struct TimeToSampleBox {
 }
 
 impl TimeToSampleBox {
-
     pub fn parse_body(body: &[u8]) -> Result<Self> {
         if body.len() < FULLBOX_EXTRA_SIZE + 4 {
             return Err(Error::BufferTooShort {
@@ -147,7 +146,6 @@ pub struct CompositionOffsetBox {
 }
 
 impl CompositionOffsetBox {
-
     pub fn parse_body(body: &[u8]) -> Result<Self> {
         if body.len() < FULLBOX_EXTRA_SIZE + 4 {
             return Err(Error::BufferTooShort {
@@ -262,7 +260,6 @@ pub struct CompositionToDecodeBox {
 }
 
 impl CompositionToDecodeBox {
-
     pub fn parse_body(body: &[u8]) -> Result<Self> {
         if body.len() < FULLBOX_EXTRA_SIZE + 4 {
             return Err(Error::BufferTooShort {
@@ -410,7 +407,6 @@ pub struct EditListBox {
 }
 
 impl EditListBox {
-
     pub fn parse_body(body: &[u8]) -> Result<Self> {
         if body.len() < FULLBOX_EXTRA_SIZE + 4 {
             return Err(Error::BufferTooShort {
@@ -578,7 +574,6 @@ pub struct SegmentIndexBox {
 }
 
 impl SegmentIndexBox {
-
     pub fn parse_body(body: &[u8]) -> Result<Self> {
         if body.len() < FULLBOX_EXTRA_SIZE + 4 + 4 + 4 + 2 {
             return Err(Error::BufferTooShort {

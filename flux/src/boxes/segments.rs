@@ -16,7 +16,6 @@ struct BrandBox {
 
 impl BrandBox {
     fn body_len(&self) -> usize {
-
         4 + 4 + self.compatible_brands.len() * 4
     }
 
@@ -73,7 +72,6 @@ pub struct FileTypeBox {
 }
 
 impl FileTypeBox {
-
     pub fn parse_box(bytes: &[u8]) -> Result<Self> {
         let b = BrandBox::parse_body(box_body(bytes, &FTYP)?)?;
         Ok(Self {

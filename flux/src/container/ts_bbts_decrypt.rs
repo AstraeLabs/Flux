@@ -67,17 +67,33 @@ fn packet_info(packet: &[u8]) -> Option<PacketInfo> {
     let mut off = 4usize;
     if afc == 2 || afc == 3 {
         if off >= PACKET_LEN {
-            return Some(PacketInfo { pid, pusi, payload_offset: None });
+            return Some(PacketInfo {
+                pid,
+                pusi,
+                payload_offset: None,
+            });
         }
         off += 1 + packet[off] as usize;
         if off > PACKET_LEN {
-            return Some(PacketInfo { pid, pusi, payload_offset: None });
+            return Some(PacketInfo {
+                pid,
+                pusi,
+                payload_offset: None,
+            });
         }
     }
     if afc != 1 && afc != 3 {
-        return Some(PacketInfo { pid, pusi, payload_offset: None });
+        return Some(PacketInfo {
+            pid,
+            pusi,
+            payload_offset: None,
+        });
     }
-    Some(PacketInfo { pid, pusi, payload_offset: Some(off) })
+    Some(PacketInfo {
+        pid,
+        pusi,
+        payload_offset: Some(off),
+    })
 }
 
 fn parse_pat_pmt_pid(packet: &[u8]) -> Option<u16> {
@@ -135,28 +151,38 @@ fn stream_type_is_video(t: u8) -> bool {
 fn parse_pmt(packet: &[u8]) -> (Vec<u16>, Vec<(u16, u8)>) {
     let mut video_pids = Vec::new();
     let mut streams = Vec::new();
-    let Some(info) = packet_info(packet) else { return (video_pids, streams) };
-    let Some(off) = info.payload_offset else { return (video_pids, streams) };
+    let Some(info) = packet_info(packet) else {
+        return (video_pids, streams);
+    };
+    let Some(off) = info.payload_offset else {
+        return (video_pids, streams);
+    };
     let mut payload = &packet[off..];
     if info.pusi {
         if payload.is_empty() {
             return (video_pids, streams);
         }
         let pointer = payload[0] as usize;
-        let Some(rest) = payload.get(1 + pointer..) else { return (video_pids, streams) };
+        let Some(rest) = payload.get(1 + pointer..) else {
+            return (video_pids, streams);
+        };
         payload = rest;
     }
     if payload.len() < 12 || payload[0] != 0x02 {
         return (video_pids, streams);
     }
     let section_length = (((payload[1] & 0x0f) as usize) << 8) | payload[2] as usize;
-    let Some(section) = payload.get(..3 + section_length) else { return (video_pids, streams) };
+    let Some(section) = payload.get(..3 + section_length) else {
+        return (video_pids, streams);
+    };
     if section.len() < 16 {
         return (video_pids, streams);
     }
     let program_info_length = (((section[10] & 0x0f) as usize) << 8) | section[11] as usize;
     let mut i = 12usize + program_info_length;
-    let Some(end) = section.len().checked_sub(4) else { return (video_pids, streams) };
+    let Some(end) = section.len().checked_sub(4) else {
+        return (video_pids, streams);
+    };
     while i + 5 <= end {
         let stream_type = section[i];
         let elementary_pid = (((section[i + 1] & 0x1f) as u16) << 8) | section[i + 2] as u16;
@@ -166,7 +192,9 @@ fn parse_pmt(packet: &[u8]) -> (Vec<u16>, Vec<(u16, u8)>) {
         }
         let descriptors = &section[i + 5..i + 5 + es_info_length];
         streams.push((elementary_pid, stream_type));
-        if stream_type_is_video(stream_type) || (stream_type == 0x06 && has_dovi_registration(descriptors)) {
+        if stream_type_is_video(stream_type)
+            || (stream_type == 0x06 && has_dovi_registration(descriptors))
+        {
             video_pids.push(elementary_pid);
         }
         i += 5 + es_info_length;
@@ -191,7 +219,11 @@ fn extract_marker_iv(packet: &[u8]) -> Option<[u8; 16]> {
     if packet.len() <= 4 {
         return None;
     }
-    let text: Vec<u8> = packet[4..].iter().copied().filter(|&b| (32..=126).contains(&b)).collect();
+    let text: Vec<u8> = packet[4..]
+        .iter()
+        .copied()
+        .filter(|&b| (32..=126).contains(&b))
+        .collect();
     if text.len() < 35 {
         return None;
     }
@@ -236,7 +268,9 @@ fn extract_sdt_service_name_iv(section: &[u8]) -> Option<[u8; 16]> {
                     continue;
                 }
                 let service_name = &body[sn_len_idx + 1..sn_len_idx + 1 + sn_len];
-                let Ok(service_name) = core::str::from_utf8(service_name) else { continue };
+                let Ok(service_name) = core::str::from_utf8(service_name) else {
+                    continue;
+                };
                 if !service_name.contains("mdcm|") {
                     continue;
                 }
@@ -269,7 +303,11 @@ struct PsiAssembler {
 
 impl PsiAssembler {
     fn new() -> Self {
-        Self { buf: Vec::new(), expected_total: None, collecting: false }
+        Self {
+            buf: Vec::new(),
+            expected_total: None,
+            collecting: false,
+        }
     }
 
     fn push(&mut self, packet: &[u8]) -> Option<Vec<u8>> {
@@ -368,7 +406,9 @@ pub(crate) fn looks_like_bbts(input: &[u8]) -> bool {
     }
     let mut sdt_asm = PsiAssembler::new();
     for chunk in input.chunks_exact(PACKET_LEN) {
-        let Some(info) = packet_info(chunk) else { continue };
+        let Some(info) = packet_info(chunk) else {
+            continue;
+        };
         if info.pid != PID_SDT {
             continue;
         }
@@ -393,7 +433,9 @@ struct PesUnit {
 
 pub(crate) fn decrypt_ts_bbts(input: &[u8], key: &[u8; 16]) -> Result<Vec<u8>> {
     if input.len() < PACKET_LEN || input[0] != SYNC_BYTE || input.len() % PACKET_LEN != 0 {
-        return Err(Error::InvalidInput("ts bbts: input is not a clean 188-byte-packet-aligned MPEG-TS stream"));
+        return Err(Error::InvalidInput(
+            "ts bbts: input is not a clean 188-byte-packet-aligned MPEG-TS stream",
+        ));
     }
 
     let cipher = Aes128::new(GenericArray::from_slice(key));
@@ -409,7 +451,9 @@ pub(crate) fn decrypt_ts_bbts(input: &[u8], key: &[u8; 16]) -> Result<Vec<u8>> {
     let mut units: Vec<PesUnit> = Vec::new();
 
     for (pkt_idx, packet) in input.chunks_exact(PACKET_LEN).enumerate() {
-        let Some(info) = packet_info(packet) else { continue };
+        let Some(info) = packet_info(packet) else {
+            continue;
+        };
         let pid = info.pid;
 
         if pid == PID_PAT {
@@ -452,13 +496,16 @@ pub(crate) fn decrypt_ts_bbts(input: &[u8], key: &[u8; 16]) -> Result<Vec<u8>> {
             continue;
         }
         let Some(base_iv) = base_iv else { continue };
-        let Some(off) = info.payload_offset else { continue };
+        let Some(off) = info.payload_offset else {
+            continue;
+        };
         if off >= PACKET_LEN {
             continue;
         }
 
         let mut is_new_pes = info.pusi;
-        if off + 4 <= PACKET_LEN && packet[off] == 0 && packet[off + 1] == 0 && packet[off + 2] == 1 {
+        if off + 4 <= PACKET_LEN && packet[off] == 0 && packet[off + 1] == 0 && packet[off + 2] == 1
+        {
             let sid = packet[off + 3];
             if sid == 0xC0 || (sid & 0xF0) == 0xE0 {
                 is_new_pes = true;
@@ -469,10 +516,17 @@ pub(crate) fn decrypt_ts_bbts(input: &[u8], key: &[u8; 16]) -> Result<Vec<u8>> {
             if let Some(u) = pending.take() {
                 units.push(u);
             }
-            pending = Some(PesUnit { bytes: Vec::new(), packet_spans: Vec::new(), iv_snap: base_iv, pid });
+            pending = Some(PesUnit {
+                bytes: Vec::new(),
+                packet_spans: Vec::new(),
+                iv_snap: base_iv,
+                pid,
+            });
         }
 
-        let Some(unit) = pending.as_mut() else { continue };
+        let Some(unit) = pending.as_mut() else {
+            continue;
+        };
         let pkt_off = pkt_idx * PACKET_LEN;
         unit.packet_spans.push((pkt_off + off, off));
         unit.bytes.extend_from_slice(&packet[off..]);
@@ -482,8 +536,16 @@ pub(crate) fn decrypt_ts_bbts(input: &[u8], key: &[u8; 16]) -> Result<Vec<u8>> {
     }
 
     for unit in &units {
-        let stream_type = stream_types.iter().find(|(p, _)| *p == unit.pid).map(|(_, t)| *t).unwrap_or(0x24);
-        let sid = if unit.bytes.len() > 3 { unit.bytes[3] } else { 0 };
+        let stream_type = stream_types
+            .iter()
+            .find(|(p, _)| *p == unit.pid)
+            .map(|(_, t)| *t)
+            .unwrap_or(0x24);
+        let sid = if unit.bytes.len() > 3 {
+            unit.bytes[3]
+        } else {
+            0
+        };
         if sid & 0xF0 != 0xE0 || unit.bytes.len() <= 8 {
             continue;
         }

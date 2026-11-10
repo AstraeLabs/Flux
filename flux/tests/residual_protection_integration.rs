@@ -5,13 +5,23 @@ use std::path::{Path, PathBuf};
 use flux::cli::{self, Args};
 
 fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
 }
 
 fn unique_temp_path(name: &str) -> PathBuf {
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let (stem, ext) = name.rsplit_once('.').expect("output name must have an extension");
-    std::env::temp_dir().join(format!("flux-test-{}-{stem}-{nanos}.{ext}", std::process::id()))
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let (stem, ext) = name
+        .rsplit_once('.')
+        .expect("output name must have an extension");
+    std::env::temp_dir().join(format!(
+        "flux-test-{}-{stem}-{nanos}.{ext}",
+        std::process::id()
+    ))
 }
 
 fn dump_json(input: &Path) -> serde_json::Value {
@@ -20,7 +30,11 @@ fn dump_json(input: &Path) -> serde_json::Value {
         .arg(input)
         .output()
         .expect("failed to run flux binary");
-    assert!(output.status.success(), "--dump must succeed: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "--dump must succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     serde_json::from_slice(&output.stdout).expect("--dump -j must print valid JSON")
 }
 

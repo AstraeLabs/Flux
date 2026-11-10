@@ -1128,8 +1128,14 @@ mod senc_truncation_tests {
         SampleEncryptionEntry {
             initialization_vector: alloc::vec![0u8; 8],
             subsamples: alloc::vec![
-                SubSampleEntry { bytes_of_clear_data: 5, bytes_of_protected_data: 1200 },
-                SubSampleEntry { bytes_of_clear_data: 0, bytes_of_protected_data: 600 },
+                SubSampleEntry {
+                    bytes_of_clear_data: 5,
+                    bytes_of_protected_data: 1200
+                },
+                SubSampleEntry {
+                    bytes_of_clear_data: 0,
+                    bytes_of_protected_data: 600
+                },
             ],
             is_encrypted: true,
             explicit_kid: None,
@@ -1146,7 +1152,8 @@ mod senc_truncation_tests {
             entries: alloc::vec![entry],
         };
         let mut buf = alloc::vec![0u8; box_.serialized_len()];
-        box_.serialize_into(&mut buf).expect("serialize a well-formed senc box");
+        box_.serialize_into(&mut buf)
+            .expect("serialize a well-formed senc box");
         (buf[BOX_HDR + FULL_HDR..].to_vec(), flags, iv_size)
     }
 
@@ -1169,10 +1176,16 @@ mod senc_truncation_tests {
         match err {
             Error::BufferTooShort { need, have, what } => {
                 assert_eq!(have, truncated.len());
-                assert_eq!(need - have, 2, "shortfall must match the exact 2-byte gap seen in production");
+                assert_eq!(
+                    need - have,
+                    2,
+                    "shortfall must match the exact 2-byte gap seen in production"
+                );
                 assert_eq!(what, "senc subsample");
             }
-            other => panic!("expected BufferTooShort while parsing the subsample table, got {other:?}"),
+            other => {
+                panic!("expected BufferTooShort while parsing the subsample table, got {other:?}")
+            }
         }
     }
 
@@ -1185,10 +1198,16 @@ mod senc_truncation_tests {
         match err {
             Error::BufferTooShort { need, have, what } => {
                 assert_eq!(have, truncated.len());
-                assert_eq!(need - have, 4, "shortfall must match the exact 4-byte gap seen in production");
+                assert_eq!(
+                    need - have,
+                    4,
+                    "shortfall must match the exact 4-byte gap seen in production"
+                );
                 assert_eq!(what, "senc subsample");
             }
-            other => panic!("expected BufferTooShort while parsing the subsample table, got {other:?}"),
+            other => {
+                panic!("expected BufferTooShort while parsing the subsample table, got {other:?}")
+            }
         }
     }
 
@@ -1198,7 +1217,10 @@ mod senc_truncation_tests {
         let truncated = &body[..body.len() - 1];
 
         let err = SampleEncryptionBox::parse_body(truncated, 0, flags, iv_size);
-        assert!(err.is_err(), "a body short by even 1 byte must never parse as Ok");
+        assert!(
+            err.is_err(),
+            "a body short by even 1 byte must never parse as Ok"
+        );
     }
 }
 
@@ -1225,7 +1247,10 @@ mod hardening_tests {
             body.extend_from_slice(b"frma");
             body.extend_from_slice(b"avc1");
             let sinf = bx(b"sinf", &body);
-            assert!(ProtectionSchemeInfoBox::parse(&sinf).is_err(), "frma_sz={sz}");
+            assert!(
+                ProtectionSchemeInfoBox::parse(&sinf).is_err(),
+                "frma_sz={sz}"
+            );
         }
         // schm too short
         let frma = bx(b"frma", b"avc1");

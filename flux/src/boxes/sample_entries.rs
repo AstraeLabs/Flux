@@ -45,7 +45,6 @@ impl Default for VisualSampleEntryFields {
 }
 
 impl VisualSampleEntryFields {
-
     pub const fn serialized_len() -> usize {
         VISUAL_SAMPLE_ENTRY_SIZE
     }
@@ -178,7 +177,6 @@ pub(crate) fn find_config_box<'a>(region: &'a [u8], fourcc: &[u8; 4]) -> Option<
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct AVCSampleEntry {
-
     pub codec_type: [u8; 4],
 
     pub visual: VisualSampleEntryFields,
@@ -189,7 +187,6 @@ pub struct AVCSampleEntry {
 }
 
 impl AVCSampleEntry {
-
     pub fn bare_parse(bytes: &[u8]) -> Result<Self> {
         use crate::avc_config::AVCConfigurationBox;
         if bytes.len() < 8 + 78 + 8 {
@@ -227,7 +224,6 @@ impl AVCSampleEntry {
 
         let config_region = &body[78..];
         if let Some(avcc) = find_config_box(config_region, b"avcC") {
-
             let config = if avcc.len() > 8 {
                 AVCConfigurationBox::parse_body(&avcc[8..])?
             } else {
@@ -343,14 +339,12 @@ impl Serialize for AVCSampleEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Mp4vSampleEntry {
-
     pub visual: VisualSampleEntryFields,
 
     pub config_boxes: Vec<crate::init_segment::OpaqueBox>,
 }
 
 impl Mp4vSampleEntry {
-
     pub const FOURCC: [u8; 4] = *b"mp4v";
 
     pub fn bare_parse(bytes: &[u8]) -> Result<Self> {
@@ -428,7 +422,6 @@ fn parse_trailing_boxes(region: &[u8]) -> Vec<crate::init_segment::OpaqueBox> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct HEVCSampleEntry {
-
     pub codec_type: [u8; 4],
 
     pub visual: VisualSampleEntryFields,
@@ -439,7 +432,6 @@ pub struct HEVCSampleEntry {
 }
 
 impl HEVCSampleEntry {
-
     pub fn bare_parse(bytes: &[u8]) -> Result<Self> {
         use crate::hevc_config::HEVCConfigurationBox;
         if bytes.len() < 8 + 78 + 8 {
@@ -569,7 +561,6 @@ pub struct VVCSampleEntry {
 }
 
 impl VVCSampleEntry {
-
     pub fn bare_parse(bytes: &[u8]) -> Result<Self> {
         use crate::vvc_config::VvcConfigurationBox;
         if bytes.len() < 8 + 78 + 8 {

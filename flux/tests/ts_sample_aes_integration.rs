@@ -6,13 +6,23 @@ use std::process::Command;
 use flux::cli::{self, Args};
 
 fn fixture(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
 }
 
 fn unique_temp_path(name: &str) -> PathBuf {
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let (stem, ext) = name.rsplit_once('.').expect("fixture output name must have an extension");
-    std::env::temp_dir().join(format!("flux-test-{}-{stem}-{nanos}.{ext}", std::process::id()))
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let (stem, ext) = name
+        .rsplit_once('.')
+        .expect("fixture output name must have an extension");
+    std::env::temp_dir().join(format!(
+        "flux-test-{}-{stem}-{nanos}.{ext}",
+        std::process::id()
+    ))
 }
 
 const KEY: &str = "000102030405060708090a0b0c0d0e0f";
@@ -26,7 +36,10 @@ fn ffmpeg_stream_md5(path: &Path, map: &str) -> Option<String> {
         .output()
         .ok()?;
     if !output.status.success() {
-        panic!("ffmpeg failed decoding {path:?} ({map}): {}", String::from_utf8_lossy(&output.stderr));
+        panic!(
+            "ffmpeg failed decoding {path:?} ({map}): {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     Some(stdout.trim().trim_start_matches("MD5=").to_string())
@@ -72,10 +85,16 @@ fn ts_sample_aes_decrypt_matches_the_independently_encrypted_source_checksums() 
     assert!(std::fs::metadata(&out).unwrap().len() > 0);
 
     if let Some(got) = ffmpeg_stream_md5(&out, "0:v") {
-        assert_eq!(got, EXPECTED_VIDEO_MD5, "decrypted video must match the independently-encrypted source");
+        assert_eq!(
+            got, EXPECTED_VIDEO_MD5,
+            "decrypted video must match the independently-encrypted source"
+        );
     }
     if let Some(got) = ffmpeg_stream_md5(&out, "0:a") {
-        assert_eq!(got, EXPECTED_AUDIO_MD5, "decrypted audio must match the independently-encrypted source");
+        assert_eq!(
+            got, EXPECTED_AUDIO_MD5,
+            "decrypted audio must match the independently-encrypted source"
+        );
     }
     let _ = std::fs::remove_file(&out);
 }

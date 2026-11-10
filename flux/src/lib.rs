@@ -3,34 +3,34 @@
 extern crate alloc;
 
 pub mod boxes;
-pub mod codec;
 #[cfg(feature = "cli")]
 pub mod cli;
+pub mod codec;
 pub mod container;
 pub mod crypto;
 pub mod error;
 pub mod ir;
 
 pub use boxes::{
-    bitreader, box_types, init_segment, movie_fragment, sample_entries, segments,
-    subtitle_entries, timing, visual_ext,
+    bitreader, box_types, init_segment, movie_fragment, sample_entries, segments, subtitle_entries,
+    timing, visual_ext,
 };
 pub use codec::{
     ac3, ac4, annexb, av1, avc_config, dts, flac, hevc_config, mp4esds, mpeg_legacy, mpegh,
     nalu_types, opus, sps, vp9, vvc_config,
 };
-pub use container::{media, pipeline, progressive, progressive_demux};
-#[cfg(feature = "cenc")]
-pub use container::webm_decrypt;
-#[cfg(feature = "sample-aes")]
-pub(crate) use container::ts_sample_aes;
 #[cfg(feature = "sample-aes")]
 pub(crate) use container::ts_bbts_decrypt;
+#[cfg(feature = "sample-aes")]
+pub(crate) use container::ts_sample_aes;
+#[cfg(feature = "cenc")]
+pub use container::webm_decrypt;
+pub use container::{media, pipeline, progressive, progressive_demux};
 pub use crypto::cenc;
 #[cfg(feature = "cenc")]
-pub use crypto::cenc_decrypt;
-#[cfg(feature = "cenc")]
 pub(crate) use crypto::cenc_crypto;
+#[cfg(feature = "cenc")]
+pub use crypto::cenc_decrypt;
 pub use crypto::drm;
 #[cfg(feature = "sample-aes")]
 pub use crypto::sample_aes;
@@ -90,9 +90,7 @@ pub use mpegh::{
 };
 pub use nalu_types::{AvcPps, AvcSps, AvcSpsExt, HevcNalArray, HevcNalUnit};
 pub use opus::{ChannelMappingTable, DOPS_FOURCC, OPUS_FOURCC, OpusSpecificBox};
-pub use pipeline::{
-    CodecConfig, Provenance, Sample, SampleFlags, TrackSpec, build_init_segment,
-};
+pub use pipeline::{CodecConfig, Provenance, Sample, SampleFlags, TrackSpec, build_init_segment};
 pub use progressive::ProgressiveMux;
 #[cfg(feature = "sample-aes")]
 pub use sample_aes::{

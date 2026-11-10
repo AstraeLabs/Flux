@@ -8,9 +8,9 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use super::{CliError, CliResult, open_sequential, read_region, scan_top_level_boxes};
+use crate::VttCueBox;
 use crate::cenc_decrypt;
 use crate::pipeline::{CodecConfig, SubtitleFormat};
-use crate::VttCueBox;
 
 struct Cue {
     start: i64,
@@ -24,7 +24,9 @@ pub(super) fn extract_text(in_path: &Path, tracks_filter: &[u32], output: &Path)
     let mut file = open_sequential(in_path)?;
     let top_level = scan_top_level_boxes(&mut file)?;
     let Some(moov_box) = top_level.iter().find(|b| &b.box_type == b"moov") else {
-        return Err(CliError::Flux(crate::Error::UnexpectedBox { expected: "moov" }));
+        return Err(CliError::Flux(crate::Error::UnexpectedBox {
+            expected: "moov",
+        }));
     };
 
     let moov_bytes = read_region(&mut file, moov_box.offset, moov_box.size)?;
@@ -34,7 +36,14 @@ pub(super) fn extract_text(in_path: &Path, tracks_filter: &[u32], output: &Path)
 
     let candidates: Vec<_> = specs
         .iter()
-        .filter(|s| matches!(&s.codec_config, CodecConfig::Subtitle { format: SubtitleFormat::WebVtt }))
+        .filter(|s| {
+            matches!(
+                &s.codec_config,
+                CodecConfig::Subtitle {
+                    format: SubtitleFormat::WebVtt
+                }
+            )
+        })
         .filter(|s| tracks_filter.is_empty() || tracks_filter.contains(&s.track_id))
         .collect();
 
@@ -179,7 +188,9 @@ mod tests {
 
     fn to_bytes(b: &impl Serialize) -> Vec<u8> {
         let mut buf = vec![0u8; b.serialized_len()];
-        let n = b.serialize_into(&mut buf).unwrap_or_else(|_| panic!("serialize failed"));
+        let n = b
+            .serialize_into(&mut buf)
+            .unwrap_or_else(|_| panic!("serialize failed"));
         buf.truncate(n);
         buf
     }
@@ -198,13 +209,18 @@ mod tests {
     fn decode_cue_sample_reads_settings_and_cue_id_regardless_of_child_order() {
         let cue = VttCueBox {
             payload: crate::boxes::subtitle_entries::CuePayloadBox::new("Second cue"),
-            settings: Some(CueSettingsBox::new("line:85% position:50% size:53% align:center")),
+            settings: Some(CueSettingsBox::new(
+                "line:85% position:50% size:53% align:center",
+            )),
             cue_id: Some(CueIdBox::new("cue-42")),
         };
         let bytes = to_bytes(&cue);
         let (text, settings, cue_id) = decode_cue_sample(&bytes).expect("must decode");
         assert_eq!(text, "Second cue");
-        assert_eq!(settings.as_deref(), Some("line:85% position:50% size:53% align:center"));
+        assert_eq!(
+            settings.as_deref(),
+            Some("line:85% position:50% size:53% align:center")
+        );
         assert_eq!(cue_id.as_deref(), Some("cue-42"));
     }
 

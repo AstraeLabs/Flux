@@ -76,10 +76,8 @@ pub const FAIRPLAY_SYSTEM_ID: [u8; 16] = [
 
 pub const fn cenc_kid_to_playready(uuid: [u8; 16]) -> [u8; 16] {
     [
-        uuid[3], uuid[2], uuid[1], uuid[0],
-        uuid[5], uuid[4],
-        uuid[7], uuid[6],
-        uuid[8], uuid[9], uuid[10], uuid[11], uuid[12], uuid[13], uuid[14], uuid[15],
+        uuid[3], uuid[2], uuid[1], uuid[0], uuid[5], uuid[4], uuid[7], uuid[6], uuid[8], uuid[9],
+        uuid[10], uuid[11], uuid[12], uuid[13], uuid[14], uuid[15],
     ]
 }
 
@@ -338,8 +336,12 @@ fn utf16le_decode(bytes: &[u8]) -> Option<String> {
     if bytes.len() % 2 != 0 {
         return None;
     }
-    let units = bytes.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]]));
-    char::decode_utf16(units).collect::<core::result::Result<String, _>>().ok()
+    let units = bytes
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]));
+    char::decode_utf16(units)
+        .collect::<core::result::Result<String, _>>()
+        .ok()
 }
 
 fn extract_wrmheader_kids(xml: &str, out: &mut Vec<[u8; 16]>) {
@@ -422,7 +424,12 @@ mod tests {
         data.extend_from_slice(&[0xFF; 9]);
         data.push(0x01);
         assert!(widevine_pssh_key_ids(&data).is_empty());
-        for d in [&[0x12u8][..], &[0x12, 0x10, 1, 2][..], &[0x0d, 1][..], &[0x09, 1, 2][..]] {
+        for d in [
+            &[0x12u8][..],
+            &[0x12, 0x10, 1, 2][..],
+            &[0x0d, 1][..],
+            &[0x09, 1, 2][..],
+        ] {
             assert!(widevine_pssh_key_ids(d).is_empty());
         }
     }
